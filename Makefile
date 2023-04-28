@@ -1,0 +1,41 @@
+.PHONY: clippy
+clippy:
+	cargo clean && \
+	cargo clippy -- -D clippy::all -W clippy::pedantic \
+		-D clippy::await_holding_lock             \
+		-D clippy::await_holding_refcell_ref      \
+		-D clippy::cast_lossless                  \
+		-D clippy::clone_on_ref_ptr               \
+		-W clippy::cognitive_complexity           \
+		-D clippy::dbg_macro                      \
+		-D clippy::debug_assert_with_mut_call     \
+		-W clippy::decimal_literal_representation \
+		-D clippy::else_if_without_else           \
+		-D clippy::empty_line_after_outer_attr    \
+		-D clippy::explicit_deref_methods         \
+		-D clippy::explicit_into_iter_loop        \
+		-D clippy::fallible_impl_from             \
+		-D clippy::filetype_is_file               \
+		-D clippy::float_cmp_const                \
+		-W clippy::future_not_send                \
+		-D clippy::implicit_saturating_sub        \
+		-W clippy::imprecise_flops                \
+		-W clippy::indexing_slicing               \
+		-D clippy::inefficient_to_string          \
+		-A clippy::inline_always                  \
+		-D clippy::large_types_passed_by_value    \
+		-D clippy::let_underscore_drop            \
+		-D clippy::lossy_float_literal            \
+		-D clippy::manual_ok_or                   \
+		-W clippy::mem_forget                     \
+		-W clippy::missing_const_for_fn           \
+		-D clippy::mut_mut                        \
+		-D clippy::mutex_integer                  \
+		-W clippy::needless_borrow                \
+		-W clippy::path_buf_push_overwrite        \
+		-W clippy::pattern_type_mismatch          \
+		-W clippy::string_add                     \
+		-W clippy::suboptimal_flops               \
+		-W clippy::unneeded_field_pattern         \
+		-D clippy::useless_transmute              \
+		-W clippy::verbose_file_reads             \
