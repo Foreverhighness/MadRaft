@@ -2,14 +2,20 @@
 clippy:
 	cargo clean && \
 	cargo clippy -- -D clippy::all -W clippy::pedantic \
+		-A clippy::inline_always                  \
+		-A clippy::missing-errors-doc             \
+		-A clippy::missing_panics_doc             \
+		-A clippy::module-name-repetitions        \
+		-A clippy::must_use_candidate             \
+		-A clippy::similar-names                  \
+		-A clippy::unused_async                   \
+		-A clippy::wildcard_imports               \
 		-D clippy::await_holding_lock             \
 		-D clippy::await_holding_refcell_ref      \
 		-D clippy::cast_lossless                  \
 		-D clippy::clone_on_ref_ptr               \
-		-W clippy::cognitive_complexity           \
 		-D clippy::dbg_macro                      \
 		-D clippy::debug_assert_with_mut_call     \
-		-W clippy::decimal_literal_representation \
 		-D clippy::else_if_without_else           \
 		-D clippy::empty_line_after_outer_attr    \
 		-D clippy::explicit_deref_methods         \
@@ -17,25 +23,25 @@ clippy:
 		-D clippy::fallible_impl_from             \
 		-D clippy::filetype_is_file               \
 		-D clippy::float_cmp_const                \
-		-W clippy::future_not_send                \
 		-D clippy::implicit_saturating_sub        \
-		-W clippy::imprecise_flops                \
-		-W clippy::indexing_slicing               \
 		-D clippy::inefficient_to_string          \
-		-A clippy::inline_always                  \
 		-D clippy::large_types_passed_by_value    \
-		-D clippy::let_underscore_drop            \
 		-D clippy::lossy_float_literal            \
 		-D clippy::manual_ok_or                   \
-		-W clippy::mem_forget                     \
-		-W clippy::missing_const_for_fn           \
 		-D clippy::mut_mut                        \
 		-D clippy::mutex_integer                  \
+		-D clippy::useless_transmute              \
+		-W clippy::cognitive_complexity           \
+		-W clippy::decimal_literal_representation \
+		-W clippy::future_not_send                \
+		-W clippy::imprecise_flops                \
+		-W clippy::indexing_slicing               \
+		-W clippy::mem_forget                     \
+		-W clippy::missing_const_for_fn           \
 		-W clippy::needless_borrow                \
 		-W clippy::path_buf_push_overwrite        \
 		-W clippy::pattern_type_mismatch          \
 		-W clippy::string_add                     \
 		-W clippy::suboptimal_flops               \
 		-W clippy::unneeded_field_pattern         \
-		-D clippy::useless_transmute              \
 		-W clippy::verbose_file_reads             \

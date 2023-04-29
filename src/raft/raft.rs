@@ -1,3 +1,7 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(clippy::diverging_sub_expression)]
+#![allow(unreachable_code)]
 use futures::{channel::mpsc, stream::FuturesUnordered, StreamExt};
 use madsim::{
     fs, net,
@@ -72,21 +76,16 @@ struct State {
     role: Role,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Role {
+    #[default]
     Follower,
     Candidate,
     Leader,
 }
 
-impl Default for Role {
-    fn default() -> Self {
-        Role::Follower
-    }
-}
-
 impl State {
-    fn is_leader(&self) -> bool {
+    const fn is_leader(&self) -> bool {
         matches!(self.role, Role::Leader)
     }
 }
@@ -146,7 +145,7 @@ impl RaftHandle {
         raft.state.is_leader()
     }
 
-    /// A service wants to switch to snapshot.  
+    /// A service wants to switch to snapshot.
     ///
     /// Only do so if Raft hasn't have more recent info since it communicate
     /// the snapshot on `apply_ch`.

@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+#![allow(dead_code)]
 use crate::shard_ctrler::client::Clerk as CtrlerClerk;
 use std::net::SocketAddr;
 

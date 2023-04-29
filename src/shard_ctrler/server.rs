@@ -1,3 +1,4 @@
+#![allow(unused_variables)]
 use super::msg::*;
 use crate::kvraft::server::{Server, State};
 use serde::{Deserialize, Serialize};

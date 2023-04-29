@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub mod client;
 pub mod msg;
 pub mod server;

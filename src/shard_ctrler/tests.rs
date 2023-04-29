@@ -104,7 +104,7 @@ async fn basic_4a() {
     info!("Test: Concurrent leave/join ...");
 
     let npara = 10;
-    let gids: Vec<u64> = (0..npara).map(|i| i as u64 * 10 + 100).collect();
+    let gids: Vec<u64> = (0..npara).map(|i| i * 10 + 100).collect();
     let mut handles = vec![];
     for &gid in gids.iter() {
         let cka = t.make_client();
@@ -216,7 +216,7 @@ async fn multi_4a() {
     info!("Test: Concurrent multi leave/join ...");
 
     let npara = 10;
-    let gids: Vec<u64> = (0..npara).map(|i| i as u64 + 1000).collect();
+    let gids: Vec<u64> = (0..npara).map(|i| i + 1000).collect();
     let mut handles = vec![];
     for &gid in gids.iter() {
         let cka = t.make_client();

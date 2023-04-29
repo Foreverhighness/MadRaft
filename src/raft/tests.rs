@@ -1,3 +1,4 @@
+#![allow(clippy::identity_op)]
 use super::tester::*;
 use futures::future;
 use log::*;
@@ -262,7 +263,7 @@ async fn concurrent_starts_2b() {
         }
         for ii in 0..5 {
             let x: u64 = 100 + ii;
-            let ok = cmds.iter().find(|&&cmd| cmd == x).is_some();
+            let ok = cmds.iter().any(|&cmd| cmd == x);
             assert!(ok, "cmd {} missing in {:?}", x, cmds);
         }
         success = true;
@@ -458,7 +459,7 @@ async fn count_2b() {
             continue 'outer;
         }
         total2 = t.rpc_total();
-        if total2 - total1 > (iters as u64 + 1 + 3) * 3 {
+        if total2 - total1 > (iters + 1 + 3) * 3 {
             panic!("too many RPCs ({}) for {} entries", total2 - total1, iters);
         }
 
@@ -771,7 +772,7 @@ async fn internal_churn(unreliable: bool) {
                 if !t.is_started(i) {
                     continue;
                 }
-                match t.start(i, x.clone()).await {
+                match t.start(i, x).await {
                     Ok(start) => index = Some(start.index),
                     Err(_) => continue,
                 }

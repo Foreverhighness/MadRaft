@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+#![allow(unreachable_code)]
 use super::msg::*;
 use crate::kvraft::server::{Server, State};
 use crate::shard_ctrler::client::Clerk as CtrlerClerk;

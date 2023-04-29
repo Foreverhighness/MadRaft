@@ -1,3 +1,4 @@
+#![allow(unused_variables)]
 use super::msg::*;
 use madsim::{net, time::*};
 use std::net::SocketAddr;
@@ -51,7 +52,7 @@ where
         for i in 0..self.servers.len() {
             let ret = net
                 .call_timeout::<Req, Result<Rsp, Error>>(
-                    self.servers[i],
+                    *self.servers.get(i).expect("{i} out of bound"),
                     args.clone(),
                     Duration::from_millis(500),
                 )

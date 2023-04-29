@@ -250,7 +250,7 @@ impl Clerk {
         }
     }
 
-    pub async fn check_append_kvs(&self, kvs: &mut Vec<(String, String)>, len: usize) {
+    pub async fn check_append_kvs(&self, kvs: &mut [(String, String)], len: usize) {
         for (k, v) in kvs.iter_mut() {
             let v0 = self.get(k.clone()).await;
             assert_eq!(&v0, v, "check failed: key={:?}", k);

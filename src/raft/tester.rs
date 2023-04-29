@@ -85,7 +85,7 @@ impl RaftTester {
             }
             if !leaders.is_empty() {
                 let last_term_with_leader = leaders.keys().max().unwrap();
-                return leaders[&last_term_with_leader][0];
+                return leaders[last_term_with_leader][0];
             }
         }
         panic!("expected one leader, got none")
@@ -225,7 +225,7 @@ impl RaftTester {
                 if !self.connected[starts].load(Ordering::SeqCst) || !self.is_started(starts) {
                     continue;
                 }
-                match self.start(starts, cmd.clone()).await {
+                match self.start(starts, cmd).await {
                     Ok(start) => {
                         index = Some(start.index);
                         break;
@@ -389,10 +389,10 @@ impl StorageHandle {
             }
         }
         let log = &mut logs[i];
-        if index as usize > log.len() {
-            panic!("server {} apply out of order {}", i, index);
-        } else if index as usize == log.len() {
-            log.push(Some(entry));
+        match (index as usize).cmp(&log.len()) {
+            std::cmp::Ordering::Less => (),
+            std::cmp::Ordering::Equal => log.push(Some(entry)),
+            std::cmp::Ordering::Greater => panic!("server {} apply out of order {}", i, index),
         }
     }
 

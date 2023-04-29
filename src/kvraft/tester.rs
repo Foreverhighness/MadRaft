@@ -215,7 +215,7 @@ impl Tester {
 pub struct ClerkId(usize);
 
 impl ClerkId {
-    fn to_addr(&self) -> SocketAddr {
+    fn to_addr(self) -> SocketAddr {
         SocketAddr::from(([0, 0, 2, self.0 as u8], 1))
     }
 }

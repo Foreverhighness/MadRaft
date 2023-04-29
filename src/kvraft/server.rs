@@ -1,3 +1,4 @@
+#![allow(unused_variables)]
 use super::msg::*;
 use crate::raft;
 use madsim::net;
@@ -48,9 +49,9 @@ impl<S: State> Server<S> {
     fn start_rpc_server(self: &Arc<Self>) {
         let net = net::NetLocalHandle::current();
 
-        let this = self.clone();
+        let this = Arc::clone(self);
         net.add_rpc_handler(move |cmd: S::Command| {
-            let this = this.clone();
+            let this = Arc::clone(&this);
             async move { this.apply(cmd).await }
         });
     }
