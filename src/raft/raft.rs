@@ -2,12 +2,11 @@
 #![allow(unused_variables)]
 #![allow(clippy::diverging_sub_expression)]
 #![allow(unreachable_code)]
-use futures::{channel::mpsc, stream::FuturesUnordered, StreamExt};
+use futures::channel::mpsc;
 use madsim::{
     fs, net,
     rand::{self, Rng},
-    task,
-    time::*,
+    time::Duration,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -16,9 +15,18 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+mod logs; // indicates that the logs module is in a different file
+use logs::*;
+
+mod rpcs;
+use rpcs::*;
+
+mod roles;
+
 #[derive(Clone)]
 pub struct RaftHandle {
     inner: Arc<Mutex<Raft>>,
+    me: usize,
 }
 
 type MsgSender = mpsc::UnboundedSender<ApplyMsg>;
@@ -67,21 +75,36 @@ struct Raft {
     // Look at the paper's Figure 2 for a description of what
     // state a Raft server must maintain.
     state: State,
+
+    vote_for: Option<usize>,
+    logs: Logs,
+
+    // volatile state on all servers
+    commit_index: usize,
+    last_applied: usize,
+
+    // volatile state on leader
+    // (reinitialized after election)
+    next_index: Vec<usize>,
+    match_index: Vec<usize>,
+
+    leader_id: Option<usize>,
 }
 
 /// State of a raft peer.
-#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct State {
     term: u64,
     role: Role,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum Role {
     #[default]
     Follower,
     Candidate,
     Leader,
+    Killed,
 }
 
 impl State {
@@ -111,8 +134,15 @@ impl RaftHandle {
             me,
             apply_ch,
             state: State::default(),
+            vote_for: None,
+            logs: Logs::new(),
+            commit_index: 0,
+            last_applied: 0,
+            next_index: Vec::new(),
+            match_index: Vec::new(),
+            leader_id: None,
         }));
-        let handle = RaftHandle { inner };
+        let handle = RaftHandle { inner, me };
         // initialize from state persisted before a crash
         handle.restore().await.expect("failed to restore");
         handle.start_rpc_server();
@@ -155,7 +185,7 @@ impl RaftHandle {
         last_included_index: u64,
         snapshot: &[u8],
     ) -> bool {
-        todo!()
+        true
     }
 
     /// The service says it has created a snapshot that has all info up to and
@@ -217,18 +247,7 @@ impl RaftHandle {
             let this = this.clone();
             async move { this.request_vote(args).await.unwrap() }
         });
-        // add more RPC handers here
-    }
-
-    async fn request_vote(&self, args: RequestVoteArgs) -> Result<RequestVoteReply> {
-        let reply = {
-            let mut this = self.inner.lock().unwrap();
-            this.request_vote(args)
-        };
-        // if you need to persist or call async functions here,
-        // make sure the lock is scoped and dropped.
-        self.persist().await.expect("failed to persist");
-        Ok(reply)
+        // add more RPC handlers here
     }
 }
 
@@ -251,53 +270,9 @@ impl Raft {
         self.apply_ch.unbounded_send(msg).unwrap();
     }
 
-    fn request_vote(&mut self, args: RequestVoteArgs) -> RequestVoteReply {
-        todo!("handle RequestVote RPC");
-    }
-
     // Here is an example to generate random number.
     fn generate_election_timeout() -> Duration {
         // see rand crate for more details
         Duration::from_millis(rand::rng().gen_range(150..300))
     }
-
-    // Here is an example to send RPC and manage concurrent tasks.
-    fn send_vote_request(&mut self) {
-        let args: RequestVoteArgs = todo!("construct RPC request");
-        let timeout = Self::generate_election_timeout();
-        let net = net::NetLocalHandle::current();
-
-        let mut rpcs = FuturesUnordered::new();
-        for (i, &peer) in self.peers.iter().enumerate() {
-            if i == self.me {
-                continue;
-            }
-            // NOTE: `call` function takes ownerships
-            let net = net.clone();
-            let args = args.clone();
-            rpcs.push(async move {
-                net.call_timeout::<RequestVoteArgs, RequestVoteReply>(peer, args, timeout)
-                    .await
-            });
-        }
-
-        // spawn a concurrent task
-        task::spawn(async move {
-            // handle RPC tasks in completion order
-            while let Some(res) = rpcs.next().await {
-                todo!("handle RPC results");
-            }
-        })
-        .detach(); // NOTE: you need to detach a task explicitly, or it will be cancelled on drop
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RequestVoteArgs {
-    // Your data here.
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RequestVoteReply {
-    // Your data here.
 }

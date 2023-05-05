@@ -1,3 +1,9 @@
+# FH-notes
+
+The Rust version uses a different way to notify a raft server that it is being killed, in the Golang project we use `rf.Kill()`, but in the Rust version we implicitly use `Drop`, the code is in `src/raft/tester.rs:332` `RaftTester::crash1`.
+
+Using `RaftHandle` as a wrapper of `Arc<Mutex<Raft>>` is a good idea, it is better than `fn foo(raft: &Arc<Mutex<Raft>>)`.
+
 # MadRaft
 
 [![CI](https://github.com/madsys-dev/madraft/workflows/CI/badge.svg?branch=main)](https://github.com/madsys-dev/madraft/actions)
@@ -8,7 +14,7 @@ Some codes are derived from [MIT 6.824](http://nil.csail.mit.edu/6.824/2021/) an
 
 ## Key Features
 
-* **Deterministic simulation**: Catch a rare bug and then reproduce it at any time you want. 
+* **Deterministic simulation**: Catch a rare bug and then reproduce it at any time you want.
 * **Discrete event simulation**: No time wasted on sleep. The full test can be completed in a few seconds.
 * **Async**: The code is written in a fully async-style.
 
