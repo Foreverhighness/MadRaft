@@ -3,11 +3,7 @@
 #![allow(clippy::diverging_sub_expression)]
 #![allow(unreachable_code)]
 use futures::channel::mpsc;
-use madsim::{
-    fs, net,
-    rand::{self, Rng},
-    time::Duration,
-};
+use madsim::{fs, net};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt, io,
@@ -56,6 +52,9 @@ pub struct Start {
     pub term: u64,
 }
 
+type StateSender = mpsc::UnboundedSender<State>;
+type StateReceiver = mpsc::UnboundedReceiver<State>;
+
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("this node is not a leader, next leader: {0}")]
@@ -89,6 +88,8 @@ struct Raft {
     match_index: Vec<usize>,
 
     leader_id: Option<usize>,
+
+    state_tx: StateSender,
 }
 
 /// State of a raft peer.
@@ -129,6 +130,7 @@ impl fmt::Debug for Raft {
 impl RaftHandle {
     pub async fn new(peers: Vec<SocketAddr>, me: usize) -> (Self, MsgRecver) {
         let (apply_ch, recver) = mpsc::unbounded();
+        let (state_tx, state_rx) = mpsc::unbounded();
         let inner = Arc::new(Mutex::new(Raft {
             peers,
             me,
@@ -141,11 +143,13 @@ impl RaftHandle {
             next_index: Vec::new(),
             match_index: Vec::new(),
             leader_id: None,
+            state_tx,
         }));
         let handle = RaftHandle { inner, me };
         // initialize from state persisted before a crash
         handle.restore().await.expect("failed to restore");
         handle.start_rpc_server();
+        handle.start_ticker(state_rx);
 
         (handle, recver)
     }
@@ -270,9 +274,6 @@ impl Raft {
         self.apply_ch.unbounded_send(msg).unwrap();
     }
 
-    // Here is an example to generate random number.
-    fn generate_election_timeout() -> Duration {
-        // see rand crate for more details
-        Duration::from_millis(rand::rng().gen_range(150..300))
-    }
+    /// persist Raft state
+    fn persist(&self) {}
 }

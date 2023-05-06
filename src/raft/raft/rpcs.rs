@@ -57,7 +57,7 @@ impl Raft {
     // Here is an example to send RPC and manage concurrent tasks.
     pub fn send_vote_request(&mut self) {
         let args: RequestVoteArgs = todo!("construct RPC request");
-        let timeout = Self::generate_election_timeout();
+        let timeout = Raft::generate_election_timeout();
         let net = net::NetLocalHandle::current();
 
         let mut rpcs = FuturesUnordered::new();
