@@ -33,7 +33,7 @@ impl Logs {
 
     pub fn last(&self) -> &LogEntry {
         let ret = self.inner.last().unwrap();
-        assert_eq!(ret.info().1, self.offset + self.inner.len());
+        assert_eq!(ret.info().1, self.offset + self.inner.len() - 1);
         ret
     }
 }

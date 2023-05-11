@@ -174,9 +174,9 @@ impl Raft {
         self.send_vote_request();
     }
     pub fn start_append_entries(&mut self, term: u64) {
-        if self.state.term != term || !matches!(self.state.role, Leader) {
-            return;
-        }
-        self.send_append_entries();
+        // if self.state.term != term || !matches!(self.state.role, Leader) {
+        //     return;
+        // }
+        // self.send_append_entries();
     }
 }

@@ -210,6 +210,7 @@ impl RaftHandle {
     /// where it can later be retrieved after a crash and restart.
     /// see paper's Figure 2 for a description of what should be persistent.
     async fn persist(&self) -> io::Result<()> {
+        return Ok(());
         let persist: Persist = todo!("persist state");
         let snapshot: Vec<u8> = todo!("persist snapshot");
         let state = bincode::serialize(&persist).unwrap();
