@@ -1,4 +1,8 @@
-use super::{Raft, RaftHandle, Role::*, State, StateReceiver};
+use super::{
+    Raft, RaftHandle,
+    Role::{Candidate, Follower, Killed, Leader},
+    State, StateReceiver,
+};
 use futures::{select_biased, FutureExt, StreamExt};
 use futures_timer::Delay;
 use madsim::{
@@ -8,6 +12,7 @@ use madsim::{
 };
 
 impl Raft {
+    pub const VOTE_TIMEOUT_MAX: Duration = Duration::from_millis(300);
     // Here is an example to generate random number.
     pub fn generate_election_timeout() -> Duration {
         // see rand crate for more details
@@ -16,22 +21,24 @@ impl Raft {
     pub fn generate_vote_timeout() -> Duration {
         Duration::from_millis(rand::rng().gen_range(300..450))
     }
-    pub fn generate_heartbeat_interval() -> Duration {
-        Duration::from_millis(150)
+    pub const fn generate_heartbeat_interval() -> Duration {
+        Duration::from_millis(50)
     }
 }
 
 // Ticker
 impl RaftHandle {
+    // TODO: replace with weak pointer
     pub(super) fn start_ticker(&self, state_rx: StateReceiver) {
         let init_term = self.inner.lock().unwrap().state.term;
         let this = self.clone();
         task::spawn(async move {
             this.ticker(init_term, state_rx).await;
         })
-        .detach()
+        .detach();
     }
 
+    // TODO: replace with weak pointer
     async fn ticker(&self, init_term: u64, mut state_rx: StateReceiver) {
         let me = self.me;
         trace!("TICKER S{me} start ticker at T{init_term}");

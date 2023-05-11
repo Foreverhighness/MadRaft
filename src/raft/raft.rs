@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fmt, io,
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
 };
 
 mod logs; // indicates that the logs module is in a different file
@@ -90,6 +90,8 @@ struct Raft {
     leader_id: Option<usize>,
 
     state_tx: StateSender,
+
+    weak: Weak<Mutex<Raft>>,
 }
 
 /// State of a raft peer.
@@ -144,11 +146,15 @@ impl RaftHandle {
             match_index: Vec::new(),
             leader_id: None,
             state_tx,
+            weak: Weak::default(),
         }));
+        inner.lock().unwrap().weak = Arc::downgrade(&inner);
+
         let handle = RaftHandle { inner, me };
         // initialize from state persisted before a crash
         handle.restore().await.expect("failed to restore");
         handle.start_rpc_server();
+
         handle.start_ticker(state_rx);
 
         (handle, recver)
@@ -249,7 +255,7 @@ impl RaftHandle {
         let this = self.clone();
         net.add_rpc_handler(move |args: RequestVoteArgs| {
             let this = this.clone();
-            async move { this.request_vote(args).await.unwrap() }
+            async move { this.request_vote(&args).await.unwrap() }
         });
         // add more RPC handlers here
     }
@@ -274,6 +280,7 @@ impl Raft {
         self.apply_ch.unbounded_send(msg).unwrap();
     }
 
-    /// persist Raft state
-    fn persist(&self) {}
+    /// persist Raft state (not used because we don't use blocked io)
+    #[allow(clippy::unused_self)]
+    const fn persist(&self) {}
 }

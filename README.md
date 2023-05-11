@@ -4,6 +4,8 @@ The Rust version uses a different way to notify a raft server that it is being k
 
 Using `RaftHandle` as a wrapper of `Arc<Mutex<Raft>>` is a good idea, it is better than `fn foo(raft: &Arc<Mutex<Raft>>)`.
 
+But when using the `Drop` scheme, I cannot use `Arc<Mutex<Raft>>` freely. This is because the `Drop` schema assumes that when `RaftHandle` is dropped, `Raft` is also dropped. But if there is still an `Arc<Mutex<Raft>>`, then the `Raft` is not dropped, which break the assumption. Alternatively, if I want to use `Arc<Mutex<Raft>>`, I have to get it by upgrading a weak pointer.
+
 # MadRaft
 
 [![CI](https://github.com/madsys-dev/madraft/workflows/CI/badge.svg?branch=main)](https://github.com/madsys-dev/madraft/actions)
