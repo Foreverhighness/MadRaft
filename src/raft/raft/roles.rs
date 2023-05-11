@@ -4,11 +4,10 @@ use super::{
     State, StateReceiver,
 };
 use futures::{select_biased, FutureExt, StreamExt};
-use futures_timer::Delay;
 use madsim::{
     rand::{self, Rng},
     task,
-    time::Duration,
+    time::{sleep_until, Duration, Instant},
 };
 
 impl Raft {
@@ -70,7 +69,7 @@ impl RaftHandle {
         let timeout = Raft::generate_election_timeout();
         trace!("TIMER S{me} generate election timeout {timeout:?} at T{term}");
 
-        let mut timeout = Delay::new(timeout).fuse();
+        let mut timeout = sleep_until(Instant::now() + timeout).fuse();
         select_biased! {
             // timeout => start new election
             _ = timeout => self.spawn_change_to_candidate(term),
@@ -87,7 +86,7 @@ impl RaftHandle {
 
         self.spawn_request_votes(term);
 
-        let mut timeout = Delay::new(timeout).fuse();
+        let mut timeout = sleep_until(Instant::now() + timeout).fuse();
         select_biased! {
             _ = timeout => self.spawn_change_to_candidate(term),
             // state changed => continue
@@ -103,7 +102,7 @@ impl RaftHandle {
 
         self.spawn_append_entries(term);
 
-        let mut timeout = Delay::new(timeout).fuse();
+        let mut timeout = sleep_until(Instant::now() + timeout).fuse();
         select_biased! {
             _ = timeout => (),
             // state changed => continue
@@ -141,7 +140,7 @@ impl RaftHandle {
 impl Raft {
     fn state_change(&mut self, new_state: State) {
         trace!(
-            "STATE S{} {:?} -> {:?} at {}",
+            "STATE S{} {:?} -> {:?} at T{}",
             self.me,
             self.state,
             new_state,
@@ -161,7 +160,7 @@ impl Raft {
         );
 
         self.state_change(State {
-            term,
+            term: term + 1,
             role: Candidate,
         });
 
