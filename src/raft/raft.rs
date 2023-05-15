@@ -3,7 +3,7 @@
 #![allow(clippy::diverging_sub_expression)]
 #![allow(unreachable_code)]
 use futures::channel::mpsc;
-use madsim::{fs, net};
+use madsim::{fs, net, task::Task};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt, io,
@@ -18,11 +18,11 @@ mod rpcs;
 use rpcs::*;
 
 mod roles;
+use roles::*;
 
 #[derive(Clone)]
 pub struct RaftHandle {
     inner: Arc<Mutex<Raft>>,
-    me: usize,
 }
 
 type MsgSender = mpsc::UnboundedSender<ApplyMsg>;
@@ -93,6 +93,7 @@ struct Raft {
     state_tx: StateSender,
 
     weak: Weak<Mutex<Raft>>,
+    tasks: Vec<Task<()>>,
 }
 
 /// State of a raft peer.
@@ -108,7 +109,6 @@ enum Role {
     Follower,
     Candidate,
     Leader,
-    Killed,
 }
 
 impl State {
@@ -148,15 +148,16 @@ impl RaftHandle {
             leader_id: None,
             state_tx,
             weak: Weak::default(),
+            tasks: Vec::new(),
         }));
         inner.lock().unwrap().weak = Arc::downgrade(&inner);
 
-        let handle = RaftHandle { inner, me };
+        let handle = RaftHandle { inner };
         // initialize from state persisted before a crash
         handle.restore().await.expect("failed to restore");
         handle.start_rpc_server();
 
-        handle.start_ticker(state_rx);
+        Ticker::start(&handle, state_rx);
 
         (handle, recver)
     }

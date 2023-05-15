@@ -1,6 +1,6 @@
 use super::{
     Raft, RaftHandle,
-    Role::{Candidate, Follower, Killed, Leader},
+    Role::{Candidate, Follower, Leader},
     State, StateReceiver,
 };
 use futures::{select_biased, FutureExt, StreamExt};
@@ -9,6 +9,7 @@ use madsim::{
     task,
     time::{sleep_until, Duration, Instant},
 };
+use std::sync::{Arc, Mutex, Weak};
 
 impl Raft {
     pub const VOTE_TIMEOUT_MAX: Duration = Duration::from_millis(300);
@@ -25,47 +26,50 @@ impl Raft {
     }
 }
 
-// Ticker
-impl RaftHandle {
-    // TODO: replace with weak pointer
-    pub(super) fn start_ticker(&self, state_rx: StateReceiver) {
-        let init_term = self.inner.lock().unwrap().state.term;
-        let this = self.clone();
-        task::spawn(async move {
-            this.ticker(init_term, state_rx).await;
-        })
-        .detach();
+pub struct Ticker {
+    weak: Weak<Mutex<Raft>>,
+    me: usize,
+
+    state: State,
+    state_rx: StateReceiver,
+}
+
+impl Ticker {
+    pub(super) fn start(handler: &RaftHandle, state_rx: StateReceiver) {
+        let mut raft = handler.inner.lock().unwrap();
+
+        let mut ticker = Ticker {
+            weak: Arc::downgrade(&handler.inner),
+            me: raft.me,
+            state: raft.state,
+            state_rx,
+        };
+
+        raft.tasks.push(task::spawn(async move {
+            ticker.run().await;
+        }));
     }
 
-    // TODO: replace with weak pointer
-    async fn ticker(&self, init_term: u64, mut state_rx: StateReceiver) {
+    async fn run(&mut self) {
         let me = self.me;
-        trace!("TICKER S{me} start ticker at T{init_term}");
+        let term = self.state.term;
+        trace!("TICKER S{me} start ticker at T{term}");
 
-        let mut state = State {
-            term: init_term,
-            role: Follower,
-        };
         loop {
-            let State { term, role } = state;
+            let State { term, role } = self.state;
             trace!("TICKER S{me} handler {role:?} at T{term}");
 
-            state = match state.role {
-                Follower => self.handle_follower(state, &mut state_rx).await,
-                Candidate => self.handle_candidate(state, &mut state_rx).await,
-                Leader => self.handle_leader(state, &mut state_rx).await,
-                Killed => unreachable!(),
+            match role {
+                Follower => self.handle_follower().await,
+                Candidate => self.handle_candidate().await,
+                Leader => self.handle_leader().await,
             };
         }
-
-        let State { term, role } = state;
-        assert!(matches!(role, Killed));
-        trace!("TICKER S{me} end {role:?} at T{term}");
     }
 
-    async fn handle_follower(&self, state: State, state_rx: &mut StateReceiver) -> State {
+    async fn handle_follower(&mut self) {
         let me = self.me;
-        let term = state.term;
+        let term = self.state.term;
         let timeout = Raft::generate_election_timeout();
         trace!("TIMER S{me} generate election timeout {timeout:?} at T{term}");
 
@@ -74,13 +78,12 @@ impl RaftHandle {
             // timeout => start new election
             _ = timeout => self.spawn_change_to_candidate(term),
             // state changed => continue
-            new_state = state_rx.select_next_some() => return new_state,
+            state = self.state_rx.select_next_some() => self.state = state,
         };
-        state
     }
-    async fn handle_candidate(&self, state: State, state_rx: &mut StateReceiver) -> State {
+    async fn handle_candidate(&mut self) {
         let me = self.me;
-        let term = state.term;
+        let term = self.state.term;
         let timeout = Raft::generate_vote_timeout();
         trace!("TIMER S{me} generate vote timeout {timeout:?} at T{term}");
 
@@ -90,13 +93,12 @@ impl RaftHandle {
         select_biased! {
             _ = timeout => self.spawn_change_to_candidate(term),
             // state changed => continue
-            new_state = state_rx.select_next_some() => return new_state,
+            state = self.state_rx.select_next_some() => self.state = state,
         };
-        state
     }
-    async fn handle_leader(&self, state: State, state_rx: &mut StateReceiver) -> State {
+    async fn handle_leader(&mut self) {
         let me = self.me;
-        let term = state.term;
+        let term = self.state.term;
         let timeout = Raft::generate_heartbeat_interval();
         trace!("TIMER S{me} generate heartbeat timeout {timeout:?} at T{term}");
 
@@ -106,31 +108,33 @@ impl RaftHandle {
         select_biased! {
             _ = timeout => (),
             // state changed => continue
-            new_state = state_rx.select_next_some() => return new_state,
+            state = self.state_rx.select_next_some() => self.state = state,
         };
-        state
     }
 
     fn spawn_change_to_candidate(&self, term: u64) {
-        let this = self.clone();
+        let weak = Weak::clone(&self.weak);
         task::spawn(async move {
-            let mut raft = this.inner.lock().unwrap();
+            let Some(this) = Weak::upgrade(&weak) else {return};
+            let mut raft = this.lock().unwrap();
             raft.change_to_candidate(term);
         })
         .detach();
     }
     fn spawn_request_votes(&self, term: u64) {
-        let this = self.clone();
+        let weak = Weak::clone(&self.weak);
         task::spawn(async move {
-            let mut raft = this.inner.lock().unwrap();
+            let Some(this) = Weak::upgrade(&weak) else {return};
+            let mut raft = this.lock().unwrap();
             raft.start_request_votes(term);
         })
         .detach();
     }
     fn spawn_append_entries(&self, term: u64) {
-        let this = self.clone();
+        let weak = Weak::clone(&self.weak);
         task::spawn(async move {
-            let mut raft = this.inner.lock().unwrap();
+            let Some(this) = Weak::upgrade(&weak) else {return};
+            let mut raft = this.lock().unwrap();
             raft.start_append_entries(term);
         })
         .detach();

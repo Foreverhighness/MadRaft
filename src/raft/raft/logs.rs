@@ -1,6 +1,5 @@
-use std::ops::{Index, RangeFrom};
-
 use serde::{Deserialize, Serialize};
+use std::ops::{Index, RangeFrom};
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct LogEntry {

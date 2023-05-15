@@ -1,7 +1,7 @@
 use super::{
     logs::LogEntry,
     Raft, RaftHandle, Result,
-    Role::{self, Candidate, Follower, Killed, Leader},
+    Role::{self, Candidate, Follower, Leader},
     State,
 };
 use futures::{stream::FuturesUnordered, StreamExt};
@@ -109,7 +109,6 @@ impl Raft {
             Follower => (),
             Candidate => self.init_candidate(),
             Leader => self.init_leader(),
-            Killed => unreachable!(),
         }
         if !(matches!(self.state.role, Follower) && matches!(role, Follower)) {
             info!(
@@ -260,7 +259,7 @@ impl Raft {
         // spawn a concurrent task
         let weak = Weak::clone(&self.weak);
         let threshold = self.peers.len() / 2 + 1;
-        task::spawn(async move {
+        self.tasks.push(task::spawn(async move {
             // handle RPC tasks in completion order
             let mut vote_count = 1;
             while let Some((res, i)) = rpcs.next().await {
@@ -296,8 +295,7 @@ impl Raft {
                     Err(e) => trace!("VOTE S{me} got RPC error {e:?} from {i} with T{old_term}"),
                 }
             }
-        })
-        .detach(); // NOTE: you need to detach a task explicitly, or it will be cancelled on drop
+        }));
     }
 }
 
@@ -417,7 +415,6 @@ impl Raft {
 
             // 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
             if leader_commit > self.commit_index {
-                let commit_index = self.commit_index;
                 let new_commit_index = leader_commit.min(self.logs.last().index);
 
                 self.set_commit_index(new_commit_index);
@@ -441,7 +438,6 @@ impl Raft {
         i: usize,
     ) {
         let me = self.me;
-        let old_term = self.state.term;
 
         let AppendEntriesReply {
             term,
@@ -449,6 +445,7 @@ impl Raft {
             conflict_term,
             conflict_index,
         } = *reply;
+        assert_eq!(self.state.term, term);
 
         if success {
             // the correct thing to do is update matchIndex to be prevLogIndex + len(entries[]) from the arguments you sent in the RPC originally.
@@ -458,13 +455,13 @@ impl Raft {
             // If successful: update nextIndex and matchIndex for follower (§5.3)
             if new_match_index > self.match_index[i] {
                 info!(
-                    "COMMIT S{i} M({}) -> M({}) with L{me} at T{old_term}",
+                    "COMMIT S{i} M({}) -> M({}) with L{me} at T{term}",
                     self.match_index[i], new_match_index
                 );
                 self.match_index[i] = new_match_index;
 
                 info!(
-                    "COMMIT S{i} N({}) -> N({}) with L{me} at T{old_term}",
+                    "COMMIT S{i} N({}) -> N({}) with L{me} at T{term}",
                     self.next_index[i],
                     new_match_index + 1
                 );
@@ -476,7 +473,7 @@ impl Raft {
             let next_index = self.logs.find_last(conflict_term).unwrap_or(conflict_index);
             // If AppendEntries fails because of log inconsistency: decrement nextIndex and retry (§5.3)
             info!(
-                "COMMIT S{i} N({}) -> N({}) with L{me} at T{old_term}",
+                "COMMIT S{i} N({}) -> N({}) with L{me} at T{term}",
                 self.next_index[i], next_index
             );
             self.next_index[i] = next_index;
@@ -513,7 +510,7 @@ impl Raft {
 
         // spawn a concurrent task
         let weak = Weak::clone(&self.weak);
-        task::spawn(async move {
+        self.tasks.push(task::spawn(async move {
             // handle RPC tasks in completion order
             while let Some((res, new_match_index, i)) = rpcs.next().await {
                 match res {
@@ -536,7 +533,6 @@ impl Raft {
                     Err(e) => trace!("HEART S{me} got RPC error {e:?} from S{i} at T{old_term}"),
                 }
             }
-        })
-        .detach(); // NOTE: you need to detach a task explicitly, or it will be cancelled on drop
+        }));
     }
 }
