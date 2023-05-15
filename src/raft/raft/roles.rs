@@ -54,7 +54,7 @@ impl RaftHandle {
                 Follower => self.handle_follower(state, &mut state_rx).await,
                 Candidate => self.handle_candidate(state, &mut state_rx).await,
                 Leader => self.handle_leader(state, &mut state_rx).await,
-                Killed => break,
+                Killed => unimplemented!(),
             };
         }
 
@@ -174,9 +174,9 @@ impl Raft {
         self.send_vote_request();
     }
     pub fn start_append_entries(&mut self, term: u64) {
-        // if self.state.term != term || !matches!(self.state.role, Leader) {
-        //     return;
-        // }
-        // self.send_append_entries();
+        if self.state.term != term || !matches!(self.state.role, Leader) {
+            return;
+        }
+        self.send_append_entries();
     }
 }

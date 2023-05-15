@@ -35,7 +35,6 @@ clippy:
 		-W clippy::decimal_literal_representation \
 		-W clippy::future_not_send                \
 		-W clippy::imprecise_flops                \
-		-W clippy::indexing_slicing               \
 		-W clippy::mem_forget                     \
 		-W clippy::missing_const_for_fn           \
 		-W clippy::needless_borrow                \
