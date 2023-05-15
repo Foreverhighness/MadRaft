@@ -109,11 +109,11 @@ impl Raft {
             Follower => (),
             Candidate => self.init_candidate(),
             Leader => self.init_leader(),
-            Killed => unimplemented!(),
+            Killed => unreachable!(),
         }
         if !(matches!(self.state.role, Follower) && matches!(role, Follower)) {
             info!(
-                "ROLE S{} {:?} => {role:?} at {}",
+                "ROLE S{} {:?} => {role:?} at T{}",
                 self.me, self.state.role, self.state.term
             );
         }
@@ -130,12 +130,19 @@ impl Raft {
         self.vote_for = Some(candidate_id);
         self.persist();
     }
-    fn update_leader_commit_index(&mut self) {
-        assert!(self.state.is_leader());
-
+    fn set_commit_index(&mut self, new_commit_index: usize) {
         let me = self.me;
         let commit_index = self.commit_index;
         let term = self.state.term;
+        info!("COMMIT S{me} C{commit_index} -> C{new_commit_index} at T{term}");
+        assert!(commit_index < new_commit_index);
+
+        self.commit_index = new_commit_index;
+        self.apply();
+    }
+    fn update_leader_commit_index(&mut self) {
+        assert!(self.state.is_leader());
+
         let n = {
             let num = self.peers.len();
             self.match_index[self.me] = self.logs.last().index;
@@ -143,6 +150,7 @@ impl Raft {
             // Find the median
             *self.match_index.clone().select_nth_unstable(num / 2).1
         };
+        // TODO: remove assert
         let m = {
             self.match_index[self.me] = self.logs.last().index;
             let mut v = self.match_index.clone();
@@ -152,11 +160,10 @@ impl Raft {
         assert_eq!(n, m);
 
         // If there exists an N such that N > commitIndex, a majority of matchIndex[i] >= N,
-        if n > commit_index {
+        if n > self.commit_index {
             // and log[N].term == currentTerm: set commitIndex = N (§5.3, §5.4).
             if self.logs[n].term == self.state.term {
-                info!("COMMIT S{me} C{commit_index} -> C{n} at T{term}");
-                self.commit_index = n;
+                self.set_commit_index(n);
             }
         }
     }
@@ -413,8 +420,7 @@ impl Raft {
                 let commit_index = self.commit_index;
                 let new_commit_index = leader_commit.min(self.logs.last().index);
 
-                info!("COMMIT S{me} C{commit_index} -> C{new_commit_index} at T{term}",);
-                self.commit_index = new_commit_index;
+                self.set_commit_index(new_commit_index);
             }
 
             success = true;

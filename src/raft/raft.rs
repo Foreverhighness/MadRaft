@@ -87,6 +87,7 @@ struct Raft {
     next_index: Vec<usize>,
     match_index: Vec<usize>,
 
+    // TODO: remove Option wrapper
     leader_id: Option<usize>,
 
     state_tx: StateSender,
@@ -259,6 +260,11 @@ impl RaftHandle {
             async move { this.request_vote(&args).await.unwrap() }
         });
         // add more RPC handlers here
+        let this = self.clone();
+        net.add_rpc_handler(move |args: AppendEntriesArgs| {
+            let this = this.clone();
+            async move { this.append_entries(args).await.unwrap() }
+        });
     }
 }
 
@@ -266,19 +272,40 @@ impl RaftHandle {
 impl Raft {
     fn start(&mut self, data: &[u8]) -> Result<Start> {
         if !self.state.is_leader() {
-            let leader = (self.me + 1) % self.peers.len();
-            return Err(Error::NotLeader(leader));
+            let leader_id = (self.me + 1) % self.peers.len();
+            return Err(Error::NotLeader(self.leader_id.unwrap_or(leader_id)));
         }
-        todo!("start agreement");
+        let me = self.me;
+        let index = self.logs.len();
+        let term = self.state.term;
+
+        // If command received from client: append entry to local log, respond after entry applied to state machine (§5.3)
+        debug!("CLIENT S{me} start D({data:?}) at I{index} at T{term}");
+        self.logs.push(LogEntry {
+            data: data.to_owned(),
+            term,
+            index,
+        });
+
+        Ok(Start {
+            index: index as u64,
+            term,
+        })
     }
 
     // Here is an example to apply committed message.
-    fn apply(&self) {
-        let msg = ApplyMsg::Command {
-            data: todo!("apply msg"),
-            index: todo!("apply msg"),
-        };
-        self.apply_ch.unbounded_send(msg).unwrap();
+    fn apply(&mut self) {
+        while self.last_applied < self.commit_index {
+            let index = self.last_applied + 1;
+            let data = self.logs[index].data.clone();
+
+            let msg = ApplyMsg::Command {
+                data,
+                index: index as u64,
+            };
+            self.apply_ch.unbounded_send(msg).unwrap();
+            self.last_applied += 1;
+        }
     }
 
     /// persist Raft state (not used because we don't use blocked io)

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct LogEntry {
-    data: Vec<u8>,
+    pub data: Vec<u8>,
     pub term: u64,
     pub index: usize,
 }
@@ -47,6 +47,7 @@ impl Logs {
     pub fn find_first(&self, term: u64) -> usize {
         self.inner
             .iter()
+            .skip(1)
             .find(|e| e.term == term)
             .map(|e| e.index)
             .unwrap()
@@ -56,6 +57,7 @@ impl Logs {
     pub fn find_last(&self, term: u64) -> Option<usize> {
         self.inner
             .iter()
+            .skip(1)
             .rev()
             .find(|e| e.term == term)
             .map(|e| e.index)
@@ -83,6 +85,10 @@ impl Logs {
 
     pub fn extend_from_slice(&mut self, entries: &[LogEntry]) {
         self.inner.extend_from_slice(entries);
+    }
+
+    pub fn push(&mut self, value: LogEntry) {
+        self.inner.push(value);
     }
 }
 

@@ -54,7 +54,7 @@ impl RaftHandle {
                 Follower => self.handle_follower(state, &mut state_rx).await,
                 Candidate => self.handle_candidate(state, &mut state_rx).await,
                 Leader => self.handle_leader(state, &mut state_rx).await,
-                Killed => unimplemented!(),
+                Killed => unreachable!(),
             };
         }
 
