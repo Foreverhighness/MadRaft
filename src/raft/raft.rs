@@ -120,7 +120,9 @@ impl State {
 /// Data needs to be persisted.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Persist {
-    // Your data here.
+    term: u64,
+    vote_for: Option<usize>,
+    logs: Logs,
 }
 
 impl fmt::Debug for Raft {
@@ -170,9 +172,18 @@ impl RaftHandle {
     /// There is no guarantee that this command will ever be committed to the
     /// Raft log, since the leader may fail or lose an election.
     pub async fn start(&self, cmd: &[u8]) -> Result<Start> {
-        let mut raft = self.inner.lock().unwrap();
-        info!("{:?} start", *raft);
-        raft.start(cmd)
+        let (res, persist) = {
+            let mut raft = self.inner.lock().unwrap();
+            info!("{:?} start", *raft);
+
+            (raft.start(cmd), raft.get_persist())
+        };
+
+        self.persist(persist, None)
+            .await
+            .expect("failed to persist");
+
+        res
     }
 
     /// The current term of this peer.
@@ -211,10 +222,7 @@ impl RaftHandle {
     /// save Raft's persistent state to stable storage,
     /// where it can later be retrieved after a crash and restart.
     /// see paper's Figure 2 for a description of what should be persistent.
-    async fn persist(&self) -> io::Result<()> {
-        return Ok(());
-        let persist: Persist = todo!("persist state");
-        let snapshot: Vec<u8> = todo!("persist snapshot");
+    async fn persist(&self, persist: Persist, snapshot: Option<Vec<u8>>) -> io::Result<()> {
         let state = bincode::serialize(&persist).unwrap();
 
         // you need to store persistent state in file "state"
@@ -226,9 +234,11 @@ impl RaftHandle {
         // otherwise data will be lost on power fail.
         file.sync_all().await?;
 
-        let file = fs::File::create("snapshot").await?;
-        file.write_all_at(&snapshot, 0).await?;
-        file.sync_all().await?;
+        if let Some(snapshot) = snapshot {
+            let file = fs::File::create("snapshot").await?;
+            file.write_all_at(&snapshot, 0).await?;
+            file.sync_all().await?;
+        }
         Ok(())
     }
 
@@ -244,7 +254,8 @@ impl RaftHandle {
         match fs::read("state").await {
             Ok(state) => {
                 let persist: Persist = bincode::deserialize(&state).unwrap();
-                todo!("restore state");
+                let mut raft = self.inner.lock().unwrap();
+                raft.restore_state(persist);
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
@@ -288,6 +299,8 @@ impl Raft {
             index,
         });
 
+        self.start_append_entries(term);
+
         Ok(Start {
             index: index as u64,
             term,
@@ -306,6 +319,31 @@ impl Raft {
             };
             self.apply_ch.unbounded_send(msg).unwrap();
             self.last_applied += 1;
+        }
+    }
+
+    fn restore_state(&mut self, persist: Persist) {
+        let Persist {
+            term,
+            vote_for,
+            logs,
+        } = persist;
+
+        self.state.term = term;
+        self.vote_for = vote_for;
+        self.logs = logs;
+    }
+
+    fn get_persist(&self) -> Persist {
+        let me = self.me;
+        let term = self.state.term;
+        let vote_for = self.vote_for;
+        let logs = self.logs.clone();
+
+        Persist {
+            term,
+            vote_for,
+            logs,
         }
     }
 

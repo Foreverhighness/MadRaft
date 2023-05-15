@@ -52,7 +52,7 @@ macro_rules! function {
 
 impl RaftHandle {
     pub async fn request_vote(&self, args: &RequestVoteArgs) -> Result<RequestVoteReply> {
-        let reply = {
+        let (reply, persist) = {
             let mut this = self.inner.lock().unwrap();
             trace!(
                 "RPC S{} receive {} call at T{}",
@@ -60,11 +60,13 @@ impl RaftHandle {
                 function!(),
                 this.state.term,
             );
-            this.request_vote(args)
+            (this.request_vote(args), this.get_persist())
         };
         // if you need to persist or call async functions here,
         // make sure the lock is scoped and dropped.
-        self.persist().await.expect("failed to persist");
+        self.persist(persist, None)
+            .await
+            .expect("failed to persist");
         Ok(reply)
     }
 }
@@ -335,7 +337,7 @@ impl Raft {
 
 impl RaftHandle {
     pub async fn append_entries(&self, args: AppendEntriesArgs) -> Result<AppendEntriesReply> {
-        let reply = {
+        let (reply, persist) = {
             let mut this = self.inner.lock().unwrap();
             trace!(
                 "RPC S{} receive {} call at T{}",
@@ -343,11 +345,13 @@ impl RaftHandle {
                 function!(),
                 this.state.term,
             );
-            this.append_entries(args)
+            (this.append_entries(args), this.get_persist())
         };
         // if you need to persist or call async functions here,
         // make sure the lock is scoped and dropped.
-        self.persist().await.expect("failed to persist");
+        self.persist(persist, None)
+            .await
+            .expect("failed to persist");
         Ok(reply)
     }
 }
