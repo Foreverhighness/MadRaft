@@ -94,6 +94,8 @@ struct Raft {
 
     weak: Weak<Mutex<Raft>>,
     tasks: Vec<Task<()>>,
+
+    snapshot: Vec<u8>,
 }
 
 /// State of a raft peer.
@@ -151,6 +153,7 @@ impl RaftHandle {
             state_tx,
             weak: Weak::default(),
             tasks: Vec::new(),
+            snapshot: Vec::new(),
         }));
         inner.lock().unwrap().weak = Arc::downgrade(&inner);
 
@@ -216,7 +219,23 @@ impl RaftHandle {
     /// (and including) that index. Raft should now trim its log as much as
     /// possible.
     pub async fn snapshot(&self, index: u64, snapshot: &[u8]) -> Result<()> {
-        todo!()
+        let (persist, snapshot) = {
+            let mut raft = self.inner.lock().unwrap();
+            #[allow(clippy::cast_possible_truncation)]
+            let index = index as usize;
+            assert!(0 < index && index <= raft.last_applied + 1);
+            let last_include_index = raft.logs.snapshot().index;
+            assert!(last_include_index < index);
+
+            let term = raft.logs[index].term;
+            raft.update_snapshot(snapshot.to_owned(), term, index);
+            (raft.get_persist(), raft.get_snapshot())
+        };
+        self.persist(persist, Some(snapshot))
+            .await
+            .expect("failed to persist");
+
+        Ok(())
     }
 
     /// save Raft's persistent state to stable storage,
@@ -246,7 +265,8 @@ impl RaftHandle {
     async fn restore(&self) -> io::Result<()> {
         match fs::read("snapshot").await {
             Ok(snapshot) => {
-                todo!("restore snapshot");
+                let mut raft = self.inner.lock().unwrap();
+                raft.restore_snapshot(snapshot);
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
@@ -276,6 +296,11 @@ impl RaftHandle {
         net.add_rpc_handler(move |args: AppendEntriesArgs| {
             let this = this.clone();
             async move { this.append_entries(args).await.unwrap() }
+        });
+        let this = self.clone();
+        net.add_rpc_handler(move |args: InstallSnapshotArgs| {
+            let this = this.clone();
+            async move { this.install_snapshot(args).await.unwrap() }
         });
     }
 }
@@ -309,6 +334,14 @@ impl Raft {
 
     // Here is an example to apply committed message.
     fn apply(&mut self) {
+        assert!(self.last_applied <= self.commit_index);
+        assert!(
+            self.last_applied >= self.logs.snapshot().index,
+            "S{} {:?}",
+            self.me,
+            self.state,
+        );
+
         while self.last_applied < self.commit_index {
             let index = self.last_applied + 1;
             let data = self.logs[index].data.clone();
@@ -318,8 +351,33 @@ impl Raft {
                 index: index as u64,
             };
             self.apply_ch.unbounded_send(msg).unwrap();
+
+            info!(
+                "APPLY S{} apply A{} -> A{} at T{}",
+                self.me,
+                self.last_applied,
+                self.last_applied + 1,
+                self.state.term
+            );
             self.last_applied += 1;
         }
+    }
+
+    fn update_snapshot(&mut self, snapshot: Vec<u8>, term: u64, index: usize) {
+        let old_size = self.logs.size();
+
+        self.snapshot = snapshot;
+        self.logs.install_snapshot(term, index);
+
+        let new_size = self.logs.size();
+        info!(
+            "SNAPSHOT S{} S(T{term}, I{index}) L{old_size} => L{new_size} at T{}",
+            self.me, self.state.term
+        );
+    }
+
+    fn restore_snapshot(&mut self, snapshot: Vec<u8>) {
+        self.snapshot = snapshot;
     }
 
     fn restore_state(&mut self, persist: Persist) {
@@ -332,6 +390,10 @@ impl Raft {
         self.state.term = term;
         self.vote_for = vote_for;
         self.logs = logs;
+
+        let index = self.logs.snapshot().index;
+        self.commit_index = index;
+        self.last_applied = index;
     }
 
     fn get_persist(&self) -> Persist {
@@ -347,7 +409,15 @@ impl Raft {
         }
     }
 
+    fn get_snapshot(&mut self) -> Vec<u8> {
+        self.snapshot.clone()
+    }
+
     /// persist Raft state (not used because we don't use blocked io)
     #[allow(clippy::unused_self)]
     const fn persist(&self) {}
+}
+
+struct WeakHandle {
+    inner: Weak<Mutex<Raft>>,
 }

@@ -1,8 +1,8 @@
 use super::{
     logs::LogEntry,
-    Raft, RaftHandle, Result,
+    ApplyMsg, Raft, RaftHandle, Result,
     Role::{self, Candidate, Follower, Leader},
-    State,
+    State, WeakHandle,
 };
 use futures::{stream::FuturesUnordered, StreamExt};
 use madsim::{net, task};
@@ -131,7 +131,10 @@ impl Raft {
         self.vote_for = Some(candidate_id);
         self.persist();
     }
-    fn set_commit_index(&mut self, new_commit_index: usize) {
+    fn update_commit_index(&mut self, new_commit_index: usize) {
+        if new_commit_index <= self.commit_index {
+            return;
+        }
         let me = self.me;
         let commit_index = self.commit_index;
         let term = self.state.term;
@@ -164,9 +167,25 @@ impl Raft {
         if n > self.commit_index {
             // and log[N].term == currentTerm: set commitIndex = N (§5.3, §5.4).
             if self.logs[n].term == self.state.term {
-                self.set_commit_index(n);
+                self.update_commit_index(n);
             }
         }
+    }
+    fn set_match_index(&mut self, i: usize, new_match_index: usize) {
+        assert!(self.match_index[i] < new_match_index);
+        info!(
+            "COMMIT S{i} M({}) -> M({}) with L{} at T{}",
+            self.match_index[i], new_match_index, self.me, self.state.term
+        );
+        self.match_index[i] = new_match_index;
+        self.update_leader_commit_index();
+    }
+    fn set_next_index(&mut self, i: usize, new_next_index: usize) {
+        info!(
+            "COMMIT S{i} N({}) -> N({}) with L{} at T{}",
+            self.next_index[i], new_next_index, self.me, self.state.term
+        );
+        self.next_index[i] = new_next_index;
     }
 }
 
@@ -421,7 +440,7 @@ impl Raft {
             if leader_commit > self.commit_index {
                 let new_commit_index = leader_commit.min(self.logs.last().index);
 
-                self.set_commit_index(new_commit_index);
+                self.update_commit_index(new_commit_index);
             }
 
             success = true;
@@ -458,34 +477,27 @@ impl Raft {
 
             // If successful: update nextIndex and matchIndex for follower (§5.3)
             if new_match_index > self.match_index[i] {
-                info!(
-                    "COMMIT S{i} M({}) -> M({}) with L{me} at T{term}",
-                    self.match_index[i], new_match_index
-                );
-                self.match_index[i] = new_match_index;
+                self.set_match_index(i, new_match_index);
 
-                info!(
-                    "COMMIT S{i} N({}) -> N({}) with L{me} at T{term}",
-                    self.next_index[i],
-                    new_match_index + 1
-                );
-                self.next_index[i] = new_match_index + 1;
-
-                self.update_leader_commit_index();
+                self.set_next_index(i, new_match_index + 1);
             }
         } else {
-            let next_index = self.logs.find_last(conflict_term).unwrap_or(conflict_index);
+            let new_next_index = self.logs.find_last(conflict_term).unwrap_or(conflict_index);
             // If AppendEntries fails because of log inconsistency: decrement nextIndex and retry (§5.3)
-            info!(
-                "COMMIT S{i} N({}) -> N({}) with L{me} at T{term}",
-                self.next_index[i], next_index
-            );
-            self.next_index[i] = next_index;
+            self.set_next_index(i, new_next_index);
         }
     }
 
     // Here is an example to send RPC and manage concurrent tasks.
     pub fn send_append_entries(&mut self) {
+        enum Args {
+            InstallSnapshot(InstallSnapshotArgs),
+            AppendEntries(AppendEntriesArgs),
+        }
+        enum Reply {
+            InstallSnapshot(InstallSnapshotReply),
+            AppendEntries(AppendEntriesReply),
+        }
         let me = self.me;
         let old_state = self.state;
         let old_term = old_state.term;
@@ -502,13 +514,34 @@ impl Raft {
             }
             // NOTE: `call` function takes ownerships
             let net = net.clone();
-            let args = self.append_entries_args(i);
+            let args = if self.need_install_snapshot(i) {
+                Args::InstallSnapshot(self.install_snapshot_args())
+            } else {
+                Args::AppendEntries(self.append_entries_args(i))
+            };
             rpcs.push(async move {
-                let new_match_index = args.prev_log_index + args.entries.len();
-                let res = net
-                    .call_timeout::<AppendEntriesArgs, AppendEntriesReply>(peer, args, timeout)
-                    .await;
-                (res, new_match_index, i)
+                match args {
+                    Args::InstallSnapshot(args) => {
+                        let new_match_index = args.last_include_index;
+                        let res = net
+                            .call_timeout::<InstallSnapshotArgs, InstallSnapshotReply>(
+                                peer, args, timeout,
+                            )
+                            .await
+                            .map(Reply::InstallSnapshot);
+                        (res, new_match_index, i)
+                    }
+                    Args::AppendEntries(args) => {
+                        let new_match_index = args.prev_log_index + args.entries.len();
+                        let res = net
+                            .call_timeout::<AppendEntriesArgs, AppendEntriesReply>(
+                                peer, args, timeout,
+                            )
+                            .await
+                            .map(Reply::AppendEntries);
+                        (res, new_match_index, i)
+                    }
+                }
             });
         }
 
@@ -525,18 +558,168 @@ impl Raft {
                             return;
                         }
 
-                        assert!(reply.term >= old_term);
-                        raft.check_term(reply.term);
+                        let term = match reply {
+                            Reply::InstallSnapshot(ref reply) => reply.term,
+                            Reply::AppendEntries(ref reply) => reply.term,
+                        };
+                        assert!(term >= old_term);
+                        raft.check_term(term);
                         if raft.state != old_state {
                             return;
                         }
-                        assert_eq!(reply.term, old_term);
+                        assert_eq!(term, old_term);
 
-                        raft.handle_append_entries_reply(&reply, new_match_index, i);
+                        match reply {
+                            Reply::InstallSnapshot(reply) => {
+                                raft.handle_install_snapshot_reply(&reply, new_match_index, i);
+                            }
+                            Reply::AppendEntries(reply) => {
+                                raft.handle_append_entries_reply(&reply, new_match_index, i);
+                            }
+                        }
                     }
                     Err(e) => trace!("HEART S{me} got RPC error {e:?} from S{i} at T{old_term}"),
                 }
             }
         }));
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize, Debug)]
+pub struct InstallSnapshotArgs {
+    term: u64,
+    leader_id: usize,
+    last_include_term: u64,
+    last_include_index: usize,
+    data: Vec<u8>,
+}
+
+#[derive(Clone, Deserialize, Serialize, Debug)]
+pub struct InstallSnapshotReply {
+    term: u64,
+}
+
+impl Raft {
+    fn install_snapshot_args(&self) -> InstallSnapshotArgs {
+        let term = self.state.term;
+        let leader_id = self.leader_id.unwrap();
+        let (last_include_term, last_include_index) = self.logs.snapshot().info();
+        let data = self.snapshot.clone();
+
+        InstallSnapshotArgs {
+            term,
+            leader_id,
+            last_include_term,
+            last_include_index,
+            data,
+        }
+    }
+    fn need_install_snapshot(&self, i: usize) -> bool {
+        self.logs.get(self.next_index[i] - 1).is_none()
+    }
+}
+
+impl RaftHandle {
+    pub async fn install_snapshot(
+        &self,
+        args: InstallSnapshotArgs,
+    ) -> Result<InstallSnapshotReply> {
+        let (reply, persist, snapshot) = {
+            let mut this = self.inner.lock().unwrap();
+            trace!(
+                "RPC S{} receive {} call at T{}",
+                this.me,
+                function!(),
+                this.state.term,
+            );
+            (
+                this.install_snapshot(args),
+                this.get_persist(),
+                this.get_snapshot(),
+            )
+        };
+        // if you need to persist or call async functions here,
+        // make sure the lock is scoped and dropped.
+        self.persist(persist, Some(snapshot))
+            .await
+            .expect("failed to persist");
+        Ok(reply)
+    }
+}
+
+impl WeakHandle {}
+
+impl Raft {
+    pub fn install_snapshot(&mut self, args: InstallSnapshotArgs) -> InstallSnapshotReply {
+        let me = self.me;
+        let term = self.state.term;
+        trace!("SNAPSHOT S{me} handle install snapshot {args:?} at T{term}");
+
+        let InstallSnapshotArgs {
+            term,
+            leader_id,
+            last_include_term,
+            last_include_index,
+            data,
+        } = args;
+
+        'deny: {
+            // 1. Reply immediately if term < currentTerm
+            let term_ok = self.check_term(term);
+            if !term_ok {
+                break 'deny;
+            }
+            assert_eq!(self.state.term, term);
+
+            // If the leader’s term is at least as large as the candidate’s current term,
+            // then the candidate recognizes the leader as legitimate and returns to follower state.
+            self.transform(Follower);
+            self.leader_id = Some(leader_id);
+
+            let snapshot_outdate = args.last_include_index <= self.last_applied;
+            if snapshot_outdate {
+                break 'deny;
+            }
+            info!("S{me} get snapshot from L{leader_id} at T{term}");
+
+            // 6. if existing log entry has same index and term as snapshot’s last included entry,
+            // retain log entries following it and reply
+            self.update_snapshot(data.clone(), last_include_term, last_include_index);
+
+            // apply snapshot
+            self.apply_ch
+                .unbounded_send(ApplyMsg::Snapshot {
+                    data,
+                    term,
+                    index: last_include_index as u64,
+                })
+                .unwrap();
+            let last_applied = self.last_applied;
+            info!("APPLY S{me} apply A{last_applied} -> A{last_include_index} at T{term}");
+            self.last_applied = last_include_index;
+
+            self.update_commit_index(last_include_index);
+        }
+        InstallSnapshotReply {
+            term: self.state.term,
+        }
+    }
+
+    fn handle_install_snapshot_reply(
+        &mut self,
+        reply: &InstallSnapshotReply,
+        new_match_index: usize,
+        i: usize,
+    ) {
+        let me = self.me;
+
+        let InstallSnapshotReply { term } = *reply;
+        assert_eq!(self.state.term, term);
+
+        // If successful: update nextIndex and matchIndex for follower (§5.3)
+        if new_match_index > self.match_index[i] {
+            self.set_match_index(i, new_match_index);
+            self.set_next_index(i, new_match_index + 1);
+        }
     }
 }
