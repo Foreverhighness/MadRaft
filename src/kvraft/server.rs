@@ -1,4 +1,3 @@
-#![allow(unused_variables)]
 use super::msg::*;
 use crate::raft;
 use madsim::net;

@@ -1,4 +1,3 @@
-#![allow(unused_variables)]
 use super::msg::*;
 use madsim::{net, time::*};
 use std::net::SocketAddr;
