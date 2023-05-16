@@ -78,7 +78,7 @@ impl Raft {
         self.state.term = term;
         self.vote_for = None;
         self.persist();
-        self.leader_id = None;
+        self.leader_id = (self.me + 1) % self.peers.len();
     }
     fn check_term(&mut self, term: u64) -> bool {
         if self.state.term < term {
@@ -98,8 +98,7 @@ impl Raft {
         info!("VOTE S{me} get vote 1/{threshold} from S{me} at T{term}");
     }
     fn init_leader(&mut self) {
-        let me = self.me;
-        self.leader_id = Some(me);
+        self.leader_id = self.me;
         self.match_index.resize(self.peers.len(), 0);
         self.next_index.resize(self.peers.len(), 0);
 
@@ -154,14 +153,6 @@ impl Raft {
             // Find the median
             *self.match_index.clone().select_nth_unstable(num / 2).1
         };
-        // TODO: remove assert
-        let m = {
-            self.match_index[self.me] = self.logs.last().index;
-            let mut v = self.match_index.clone();
-            v.sort_unstable();
-            v[v.len() / 2]
-        };
-        assert_eq!(n, m);
 
         // If there exists an N such that N > commitIndex, a majority of matchIndex[i] >= N,
         if n > self.commit_index {
@@ -404,7 +395,7 @@ impl Raft {
             // If the leader’s term is at least as large as the candidate’s current term,
             // then the candidate recognizes the leader as legitimate and returns to follower state.
             self.transform(Follower);
-            self.leader_id = Some(leader_id);
+            self.leader_id = leader_id;
             trace!("S{me} get heartbeat from L{leader_id} at T{term}");
 
             let entry = self.logs.get(prev_log_index);
@@ -600,7 +591,7 @@ pub struct InstallSnapshotReply {
 impl Raft {
     fn install_snapshot_args(&self) -> InstallSnapshotArgs {
         let term = self.state.term;
-        let leader_id = self.leader_id.unwrap();
+        let leader_id = self.leader_id;
         let (last_include_term, last_include_index) = self.logs.snapshot().info();
         let data = self.snapshot.clone();
 
@@ -670,7 +661,7 @@ impl Raft {
             // If the leader’s term is at least as large as the candidate’s current term,
             // then the candidate recognizes the leader as legitimate and returns to follower state.
             self.transform(Follower);
-            self.leader_id = Some(leader_id);
+            self.leader_id = leader_id;
 
             let snapshot_outdate = args.last_include_index <= self.last_applied;
             if snapshot_outdate {

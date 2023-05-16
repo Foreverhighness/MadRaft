@@ -83,8 +83,7 @@ struct Raft {
     next_index: Vec<usize>,
     match_index: Vec<usize>,
 
-    // TODO: remove Option wrapper
-    leader_id: Option<usize>,
+    leader_id: usize,
 
     state_tx: StateSender,
 
@@ -134,6 +133,7 @@ impl RaftHandle {
     pub async fn new(peers: Vec<SocketAddr>, me: usize) -> (Self, MsgRecver) {
         let (apply_ch, recver) = mpsc::unbounded();
         let (state_tx, state_rx) = mpsc::unbounded();
+        let n = peers.len();
         let inner = Arc::new(Mutex::new(Raft {
             peers,
             me,
@@ -145,7 +145,7 @@ impl RaftHandle {
             last_applied: 0,
             next_index: Vec::new(),
             match_index: Vec::new(),
-            leader_id: None,
+            leader_id: (me + 1) % n,
             state_tx,
             weak: Weak::default(),
             tasks: Vec::new(),
@@ -306,8 +306,7 @@ impl RaftHandle {
 impl Raft {
     fn start(&mut self, data: &[u8]) -> Result<Start> {
         if !self.state.is_leader() {
-            let leader_id = (self.me + 1) % self.peers.len();
-            return Err(Error::NotLeader(self.leader_id.unwrap_or(leader_id)));
+            return Err(Error::NotLeader(self.leader_id));
         }
         let me = self.me;
         let index = self.logs.len();

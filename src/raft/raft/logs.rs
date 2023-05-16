@@ -95,10 +95,10 @@ impl Logs {
     }
 
     pub fn install_snapshot(&mut self, term: u64, index: usize) {
+        let len = self.len();
         self.inner[0].term = term;
         self.inner[0].index = index;
 
-        let len = self.len();
         let end = self.inner.len().min(index - self.offset + 1);
         self.inner.drain(1..end);
 
