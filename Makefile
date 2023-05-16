@@ -8,8 +8,6 @@ clippy:
 		-A clippy::module-name-repetitions        \
 		-A clippy::must_use_candidate             \
 		-A clippy::similar-names                  \
-		-A clippy::unused_async                   \
-		-A clippy::wildcard_imports               \
 		-D clippy::await_holding_lock             \
 		-D clippy::await_holding_refcell_ref      \
 		-D clippy::cast_lossless                  \

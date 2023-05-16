@@ -1,7 +1,3 @@
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(clippy::diverging_sub_expression)]
-#![allow(unreachable_code)]
 use futures::channel::mpsc;
 use madsim::{fs, net, task::Task};
 use serde::{Deserialize, Serialize};
@@ -12,13 +8,13 @@ use std::{
 };
 
 mod logs; // indicates that the logs module is in a different file
-use logs::*;
+use logs::{LogEntry, Logs};
 
 mod rpcs;
-use rpcs::*;
+use rpcs::{AppendEntriesArgs, InstallSnapshotArgs, RequestVoteArgs};
 
 mod roles;
-use roles::*;
+use roles::Ticker;
 
 #[derive(Clone)]
 pub struct RaftHandle {
@@ -205,11 +201,12 @@ impl RaftHandle {
     ///
     /// Only do so if Raft hasn't have more recent info since it communicate
     /// the snapshot on `apply_ch`.
+    #[allow(clippy::unused_async)]
     pub async fn cond_install_snapshot(
         &self,
-        last_included_term: u64,
-        last_included_index: u64,
-        snapshot: &[u8],
+        _last_included_term: u64,
+        _last_included_index: u64,
+        _snapshot: &[u8],
     ) -> bool {
         true
     }
@@ -397,7 +394,6 @@ impl Raft {
     }
 
     fn get_persist(&self) -> Persist {
-        let me = self.me;
         let term = self.state.term;
         let vote_for = self.vote_for;
         let logs = self.logs.clone();
@@ -416,8 +412,4 @@ impl Raft {
     /// persist Raft state (not used because we don't use blocked io)
     #[allow(clippy::unused_self)]
     const fn persist(&self) {}
-}
-
-struct WeakHandle {
-    inner: Weak<Mutex<Raft>>,
 }

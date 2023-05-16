@@ -2,7 +2,7 @@ use super::{
     logs::LogEntry,
     ApplyMsg, Raft, RaftHandle, Result,
     Role::{self, Candidate, Follower, Leader},
-    State, WeakHandle,
+    State,
 };
 use futures::{stream::FuturesUnordered, StreamExt};
 use madsim::{net, task};
@@ -460,8 +460,6 @@ impl Raft {
         new_match_index: usize,
         i: usize,
     ) {
-        let me = self.me;
-
         let AppendEntriesReply {
             term,
             success,
@@ -647,8 +645,6 @@ impl RaftHandle {
     }
 }
 
-impl WeakHandle {}
-
 impl Raft {
     pub fn install_snapshot(&mut self, args: InstallSnapshotArgs) -> InstallSnapshotReply {
         let me = self.me;
@@ -711,8 +707,6 @@ impl Raft {
         new_match_index: usize,
         i: usize,
     ) {
-        let me = self.me;
-
         let InstallSnapshotReply { term } = *reply;
         assert_eq!(self.state.term, term);
 
