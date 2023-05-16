@@ -1,6 +1,6 @@
 use super::{
     logs::LogEntry,
-    ApplyMsg, Raft, RaftHandle, Result,
+    Raft, RaftHandle, Result,
     Role::{self, Candidate, Follower, Leader},
     State,
 };
@@ -290,6 +290,8 @@ impl Raft {
                         }
                         assert_eq!(reply.term, old_term);
 
+                        trace!("VOTE S{me} handle S{i} vote reply {reply:?} at T{old_term}");
+
                         let RequestVoteReply { vote_granted , ..} = reply;
 
                         // handle vote request reply
@@ -396,7 +398,7 @@ impl Raft {
             // then the candidate recognizes the leader as legitimate and returns to follower state.
             self.transform(Follower);
             self.leader_id = leader_id;
-            trace!("S{me} get heartbeat from L{leader_id} at T{term}");
+            trace!("HEART S{me} get heartbeat from L{leader_id} at T{term}");
 
             let entry = self.logs.get(prev_log_index);
             // 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
@@ -451,6 +453,11 @@ impl Raft {
         new_match_index: usize,
         i: usize,
     ) {
+        trace!(
+            "HEARTBEAT S{} handle S{i} append entries reply {reply:?} at T{}",
+            self.me,
+            self.state.term
+        );
         let AppendEntriesReply {
             term,
             success,
@@ -663,27 +670,15 @@ impl Raft {
             self.transform(Follower);
             self.leader_id = leader_id;
 
-            let snapshot_outdate = args.last_include_index <= self.last_applied;
+            let snapshot_outdate = args.last_include_index <= self.logs.snapshot().index;
             if snapshot_outdate {
                 break 'deny;
             }
-            info!("S{me} get snapshot from L{leader_id} at T{term}");
+            info!("SNAPSHOT S{me} get snapshot from L{leader_id} at T{term}");
 
             // 6. if existing log entry has same index and term as snapshot’s last included entry,
             // retain log entries following it and reply
-            self.update_snapshot(data.clone(), last_include_term, last_include_index);
-
-            // apply snapshot
-            self.apply_ch
-                .unbounded_send(ApplyMsg::Snapshot {
-                    data,
-                    term,
-                    index: last_include_index as u64,
-                })
-                .unwrap();
-            let last_applied = self.last_applied;
-            info!("APPLY S{me} apply A{last_applied} -> A{last_include_index} at T{term}");
-            self.last_applied = last_include_index;
+            self.update_snapshot(data, last_include_term, last_include_index);
 
             self.update_commit_index(last_include_index);
         }
@@ -698,13 +693,18 @@ impl Raft {
         new_match_index: usize,
         i: usize,
     ) {
+        trace!(
+            "SNAPSHOT S{} handle S{i} install snapshot reply {reply:?} at T{}",
+            self.me,
+            self.state.term
+        );
         let InstallSnapshotReply { term } = *reply;
         assert_eq!(self.state.term, term);
 
         // If successful: update nextIndex and matchIndex for follower (§5.3)
         if new_match_index > self.match_index[i] {
             self.set_match_index(i, new_match_index);
-            self.set_next_index(i, new_match_index + 1);
         }
+        self.set_next_index(i, new_match_index + 1);
     }
 }

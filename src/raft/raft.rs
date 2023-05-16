@@ -173,7 +173,6 @@ impl RaftHandle {
     pub async fn start(&self, cmd: &[u8]) -> Result<Start> {
         let (res, persist) = {
             let mut raft = self.inner.lock().unwrap();
-            info!("{:?} start", *raft);
 
             (raft.start(cmd), raft.get_persist())
         };
@@ -223,6 +222,13 @@ impl RaftHandle {
             assert!(0 < index && index <= raft.last_applied + 1);
             let last_include_index = raft.logs.snapshot().index;
             assert!(last_include_index < index);
+
+            debug!(
+                "CLIENT S{} snapshot S({}) at I{index} at T{}",
+                raft.me,
+                bincode::deserialize::<u64>(snapshot).unwrap(),
+                raft.state.term
+            );
 
             let term = raft.logs[index].term;
             raft.update_snapshot(snapshot.to_owned(), term, index);
@@ -313,7 +319,10 @@ impl Raft {
         let term = self.state.term;
 
         // If command received from client: append entry to local log, respond after entry applied to state machine (§5.3)
-        debug!("CLIENT S{me} start D({data:?}) at I{index} at T{term}");
+        debug!(
+            "CLIENT S{me} start D({}) at I{index} at T{term}",
+            bincode::deserialize::<u64>(data).unwrap()
+        );
         self.logs.push(LogEntry {
             data: data.to_owned(),
             term,
@@ -331,31 +340,33 @@ impl Raft {
     // Here is an example to apply committed message.
     fn apply(&mut self) {
         assert!(self.last_applied <= self.commit_index);
-        assert!(
-            self.last_applied >= self.logs.snapshot().index,
-            "S{} {:?}",
-            self.me,
-            self.state,
-        );
 
         while self.last_applied < self.commit_index {
-            let index = self.last_applied + 1;
-            let data = self.logs[index].data.clone();
-
-            let msg = ApplyMsg::Command {
-                data,
-                index: index as u64,
+            let mut applied_index = self.last_applied + 1;
+            let need_snapshot = applied_index <= self.logs.snapshot().index;
+            let msg = if need_snapshot {
+                let (term, index) = self.logs.snapshot().info();
+                applied_index = index;
+                ApplyMsg::Snapshot {
+                    data: self.snapshot.clone(),
+                    term,
+                    index: index as u64,
+                }
+            } else {
+                let data = self.logs[applied_index].data.clone();
+                ApplyMsg::Command {
+                    data,
+                    index: applied_index as u64,
+                }
             };
+
             self.apply_ch.unbounded_send(msg).unwrap();
 
             info!(
                 "APPLY S{} apply A{} -> A{} at T{}",
-                self.me,
-                self.last_applied,
-                self.last_applied + 1,
-                self.state.term
+                self.me, self.last_applied, applied_index, self.state.term
             );
-            self.last_applied += 1;
+            self.last_applied = applied_index;
         }
     }
 
