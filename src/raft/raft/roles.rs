@@ -12,7 +12,6 @@ use madsim::{
 use std::sync::{Arc, Mutex, Weak};
 
 impl Raft {
-    pub const VOTE_TIMEOUT_MAX: Duration = Duration::from_millis(300);
     // Here is an example to generate random number.
     pub fn generate_election_timeout() -> Duration {
         // see rand crate for more details

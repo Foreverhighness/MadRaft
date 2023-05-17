@@ -9,6 +9,8 @@ use madsim::{net, task};
 use serde::{Deserialize, Serialize};
 use std::sync::Weak;
 
+const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct RequestVoteArgs {
     term: u64,
@@ -264,7 +266,6 @@ impl Raft {
         trace!("VOTE S{me} send vote with args: {args:?} at T{old_term}",);
 
         // prepare futures
-        let timeout = Raft::VOTE_TIMEOUT_MAX;
         let net = net::NetLocalHandle::current();
 
         let mut rpcs = FuturesUnordered::new();
@@ -277,7 +278,7 @@ impl Raft {
             let args = args.clone();
             rpcs.push(async move {
                 let res = net
-                    .call_timeout::<RequestVoteArgs, RequestVoteReply>(peer, args, timeout)
+                    .call_timeout::<RequestVoteArgs, RequestVoteReply>(peer, args, RPC_TIMEOUT)
                     .await;
                 (res, i)
             });
@@ -510,8 +511,6 @@ impl Raft {
         let old_state = self.state;
         let old_term = old_state.term;
 
-        // prepare args
-        let timeout = Raft::generate_heartbeat_interval();
         let net = net::NetLocalHandle::current();
 
         // prepare futures
@@ -533,7 +532,9 @@ impl Raft {
                         let new_match_index = args.last_include_index;
                         let res = net
                             .call_timeout::<InstallSnapshotArgs, InstallSnapshotReply>(
-                                peer, args, timeout,
+                                peer,
+                                args,
+                                RPC_TIMEOUT,
                             )
                             .await
                             .map(Reply::InstallSnapshot);
@@ -543,7 +544,9 @@ impl Raft {
                         let new_match_index = args.prev_log_index + args.entries.len();
                         let res = net
                             .call_timeout::<AppendEntriesArgs, AppendEntriesReply>(
-                                peer, args, timeout,
+                                peer,
+                                args,
+                                RPC_TIMEOUT,
                             )
                             .await
                             .map(Reply::AppendEntries);
