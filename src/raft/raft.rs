@@ -221,7 +221,11 @@ impl RaftHandle {
             let index = index as usize;
             assert!(0 < index && index <= raft.last_applied + 1);
             let last_include_index = raft.logs.snapshot().index;
-            assert!(last_include_index < index);
+            // assert!(last_include_index < index, "{last_include_index} < {index}");
+            let snapshot_outdate = index <= last_include_index;
+            if snapshot_outdate {
+                return Ok(());
+            }
 
             debug!(
                 "CLIENT S{} snapshot S({}) at I{index} at T{}",
