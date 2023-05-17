@@ -162,8 +162,12 @@ impl Raft {
             }
         }
     }
-    fn set_match_index(&mut self, i: usize, new_match_index: usize) {
-        assert!(self.match_index[i] < new_match_index);
+    /// The prefix `update` means that the new value will be greater than the old value.
+    fn update_match_index(&mut self, i: usize, new_match_index: usize) {
+        assert!(self.match_index[i] < self.next_index[i]);
+        if self.match_index[i] >= new_match_index {
+            return;
+        }
         info!(
             "COMMIT S{i} M({}) -> M({}) with L{} at T{}",
             self.match_index[i], new_match_index, self.me, self.state.term
@@ -171,12 +175,23 @@ impl Raft {
         self.match_index[i] = new_match_index;
         self.update_leader_commit_index();
     }
+    /// The prefix `update` means that the new value will be greater than the old value.
+    fn update_next_index(&mut self, i: usize, new_next_index: usize) {
+        if self.next_index[i] >= new_next_index {
+            return;
+        }
+        self.set_next_index(i, new_next_index);
+    }
     fn set_next_index(&mut self, i: usize, new_next_index: usize) {
+        if new_next_index <= self.match_index[i] {
+            return;
+        }
         info!(
             "COMMIT S{i} N({}) -> N({}) with L{} at T{}",
             self.next_index[i], new_next_index, self.me, self.state.term
         );
         self.next_index[i] = new_next_index;
+        assert!(self.match_index[i] < self.next_index[i]);
     }
 }
 
@@ -472,11 +487,8 @@ impl Raft {
             let new_match_index = new_match_index;
 
             // If successful: update nextIndex and matchIndex for follower (§5.3)
-            if new_match_index > self.match_index[i] {
-                self.set_match_index(i, new_match_index);
-
-                self.set_next_index(i, new_match_index + 1);
-            }
+            self.update_match_index(i, new_match_index);
+            self.update_next_index(i, new_match_index + 1);
         } else {
             let new_next_index = self.logs.find_last(conflict_term).unwrap_or(conflict_index);
             // If AppendEntries fails because of log inconsistency: decrement nextIndex and retry (§5.3)
@@ -702,9 +714,7 @@ impl Raft {
         assert_eq!(self.state.term, term);
 
         // If successful: update nextIndex and matchIndex for follower (§5.3)
-        if new_match_index > self.match_index[i] {
-            self.set_match_index(i, new_match_index);
-        }
-        self.set_next_index(i, new_match_index + 1);
+        self.update_match_index(i, new_match_index);
+        self.update_next_index(i, new_match_index + 1);
     }
 }
