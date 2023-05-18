@@ -7,7 +7,7 @@ use futures::{select_biased, FutureExt, StreamExt};
 use madsim::{
     rand::{self, Rng},
     task,
-    time::{sleep_until, Duration, Instant},
+    time::{sleep, Duration},
 };
 use std::sync::{Arc, Mutex, Weak};
 
@@ -15,13 +15,13 @@ impl Raft {
     // Here is an example to generate random number.
     pub fn generate_election_timeout() -> Duration {
         // see rand crate for more details
-        Duration::from_millis(rand::rng().gen_range(150..300))
+        Duration::from_millis(rand::rng().gen_range(200..320))
     }
     pub fn generate_vote_timeout() -> Duration {
-        Duration::from_millis(rand::rng().gen_range(300..450))
+        Duration::from_millis(rand::rng().gen_range(320..400))
     }
     pub const fn generate_heartbeat_interval() -> Duration {
-        Duration::from_millis(50)
+        Duration::from_millis(80)
     }
 }
 
@@ -72,7 +72,7 @@ impl Ticker {
         let timeout = Raft::generate_election_timeout();
         trace!("TIMER S{me} generate election timeout {timeout:?} at T{term}");
 
-        let mut timeout = sleep_until(Instant::now() + timeout).fuse();
+        let mut timeout = sleep(timeout).fuse();
         select_biased! {
             // timeout => start new election
             _ = timeout => self.spawn_change_to_candidate(term),
@@ -88,7 +88,7 @@ impl Ticker {
 
         self.spawn_request_votes(term);
 
-        let mut timeout = sleep_until(Instant::now() + timeout).fuse();
+        let mut timeout = sleep(timeout).fuse();
         select_biased! {
             _ = timeout => self.spawn_change_to_candidate(term),
             // state changed => continue
@@ -103,7 +103,7 @@ impl Ticker {
 
         self.spawn_append_entries(term);
 
-        let mut timeout = sleep_until(Instant::now() + timeout).fuse();
+        let mut timeout = sleep(timeout).fuse();
         select_biased! {
             _ = timeout => (),
             // state changed => continue
