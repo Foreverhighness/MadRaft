@@ -1,10 +1,15 @@
 use serde::{Deserialize, Serialize};
 
+pub type ClientId = usize;
+pub type SequenceNumber = usize;
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpId {
-    pub client_id: usize,
-    pub seq: usize,
+    pub client_id: ClientId,
+    pub seq: SequenceNumber,
 }
+
+pub type Reply = String;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Op {

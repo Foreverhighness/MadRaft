@@ -6,7 +6,7 @@ use std::{
 };
 
 pub struct Clerk {
-    core: ClerkCore<Op, String>,
+    core: ClerkCore<Op, Reply>,
 
     seq: AtomicUsize,
 }
@@ -29,19 +29,21 @@ impl Clerk {
     /// fetch the current value for a key.
     /// returns "" if the key does not exist.
     /// keeps trying forever in the face of all other errors.
-    pub async fn get(&self, key: String) -> String {
+    pub async fn get(&self, key: String) -> Reply {
         self.core.call(Op::Get { key }).await
     }
 
     pub async fn put(&self, key: String, value: String) {
         let id = self.op_id();
-        self.core.call(Op::Put { key, value, id }).await;
+        let ret = self.core.call(Op::Put { key, value, id }).await;
+        assert_eq!(ret, String::default());
         self.seq.fetch_add(1, Relaxed);
     }
 
     pub async fn append(&self, key: String, value: String) {
         let id = self.op_id();
-        self.core.call(Op::Append { key, value, id }).await;
+        let ret = self.core.call(Op::Append { key, value, id }).await;
+        assert_eq!(ret, String::default());
         self.seq.fetch_add(1, Relaxed);
     }
 }
@@ -51,19 +53,19 @@ pub struct ClerkCore<Req, Rsp> {
     _mark: std::marker::PhantomData<(Req, Rsp)>,
 
     leader: AtomicUsize,
-    pub me: usize,
+    pub me: ClientId,
 }
 
 pub struct ClerkCoreRef<'a, Req, Rsp> {
     servers: &'a [SocketAddr],
     leader: &'a AtomicUsize,
-    me: usize,
+    me: ClientId,
 
     _mark: std::marker::PhantomData<(Req, Rsp)>,
 }
 
 /// For debugging purposes, this function does not return a random value.
-pub fn generate_client_id() -> usize {
+pub fn generate_client_id() -> ClientId {
     static COUNT: AtomicUsize = AtomicUsize::new(0);
     COUNT.fetch_add(1, Relaxed)
 }
@@ -96,7 +98,7 @@ where
     Req: net::Message + Clone,
     Rsp: net::Message,
 {
-    pub const fn new(servers: &'a [SocketAddr], leader: &'a AtomicUsize, me: usize) -> Self {
+    pub const fn new(servers: &'a [SocketAddr], leader: &'a AtomicUsize, me: ClientId) -> Self {
         ClerkCoreRef {
             servers,
             _mark: std::marker::PhantomData,
