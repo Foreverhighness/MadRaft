@@ -8,10 +8,6 @@ use std::{
 pub struct Clerk {
     core: ClerkCore<Op, String>,
 
-    // TODO: lab4 store state here
-    // servers: Vec<SocketAddr>,
-    // leader: AtomicUsize,
-    // me: usize,
     seq: AtomicUsize,
 }
 
@@ -51,12 +47,19 @@ impl Clerk {
 }
 
 pub struct ClerkCore<Req, Rsp> {
-    // TODO: lab4 replace with &'a [SocketAddr]
     servers: Vec<SocketAddr>,
     _mark: std::marker::PhantomData<(Req, Rsp)>,
 
     leader: AtomicUsize,
     pub me: usize,
+}
+
+pub struct ClerkCoreRef<'a, Req, Rsp> {
+    servers: &'a [SocketAddr],
+    leader: &'a AtomicUsize,
+    me: usize,
+
+    _mark: std::marker::PhantomData<(Req, Rsp)>,
 }
 
 /// For debugging purposes, this function does not return a random value.
@@ -79,8 +82,22 @@ where
         }
     }
 
-    pub fn with_state(servers: Vec<SocketAddr>, leader: AtomicUsize, me: usize) -> Self {
-        ClerkCore {
+    fn as_ref(&self) -> ClerkCoreRef<'_, Req, Rsp> {
+        ClerkCoreRef::new(&self.servers, &self.leader, self.me)
+    }
+
+    pub async fn call(&self, args: Req) -> Rsp {
+        self.as_ref().call(args).await
+    }
+}
+
+impl<'a, Req, Rsp> ClerkCoreRef<'a, Req, Rsp>
+where
+    Req: net::Message + Clone,
+    Rsp: net::Message,
+{
+    pub const fn new(servers: &'a [SocketAddr], leader: &'a AtomicUsize, me: usize) -> Self {
+        ClerkCoreRef {
             servers,
             _mark: std::marker::PhantomData,
             leader,
