@@ -1,10 +1,17 @@
 # FH-notes
 
+## lab2
 The Rust version uses a different way to notify a raft server that it is being killed, in the Golang project we use `rf.Kill()`, but in the Rust version we implicitly use `Drop`, the code is in `src/raft/tester.rs:332` `RaftTester::crash1`.
 
 Using `RaftHandle` as a wrapper of `Arc<Mutex<Raft>>` is a good idea, it is better than `fn foo(raft: &Arc<Mutex<Raft>>)`.
 
 But when using the `Drop` scheme, I cannot use `Arc<Mutex<Raft>>` freely. This is because the `Drop` schema assumes that when `RaftHandle` is dropped, `Raft` is also dropped. But if there is still an `Arc<Mutex<Raft>>`, then the `Raft` is not dropped, which break the assumption. Alternatively, if I want to use `Arc<Mutex<Raft>>`, I have to get it by upgrading a weak pointer.
+
+## lab3
+`ClerkCore` just call appropriate RPC handler and guarantee success. Because `Clerk` need sequence number to indicate duplicate request, so clerk need additional `seq` property, but `ClerkCore` does not need.
+
+## lab4
+My go implementation of the shard server is leader to handle everything, but wry's approach is much better than mine. It allows follower to fetch the latest config and then use an RPC call to notify leader to handle that config change event, which improves system availability but increases RPC traffic.
 
 # MadRaft
 
