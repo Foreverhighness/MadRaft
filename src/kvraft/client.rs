@@ -108,9 +108,6 @@ where
     }
 
     pub async fn call(&self, args: Req) -> Rsp {
-        // TODO: lab3 remove limit
-        const LIMIT: usize = 100;
-
         let net = net::NetLocalHandle::current();
         let me = self.me;
         trace!("CLIENT C{me} call args {args:?}");
@@ -119,8 +116,7 @@ where
         let mut leader = self.leader.load(Relaxed);
         let len = self.servers.len();
 
-        // loop {
-        for _ in 0..LIMIT {
+        loop {
             match net
                 .call_timeout::<Req, Result<Rsp, Error>>(
                     *self.servers.get(leader).expect("{i} out of bound"),
@@ -145,6 +141,5 @@ where
             }
             leader = (leader + 1) % len;
         }
-        unreachable!();
     }
 }
