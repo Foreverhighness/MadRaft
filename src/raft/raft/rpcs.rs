@@ -132,7 +132,7 @@ impl Raft {
         self.vote_for = Some(candidate_id);
         self.persist();
     }
-    fn update_commit_index(&mut self, new_commit_index: usize) {
+    pub fn update_commit_index(&mut self, new_commit_index: usize) {
         if new_commit_index <= self.commit_index {
             return;
         }

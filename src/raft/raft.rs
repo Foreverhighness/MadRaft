@@ -402,9 +402,8 @@ impl Raft {
         self.vote_for = vote_for;
         self.logs = logs;
 
-        let index = self.logs.snapshot().index;
-        self.commit_index = index;
-        self.last_applied = index;
+        let new_commit_index = self.logs.snapshot().index;
+        self.update_commit_index(new_commit_index);
     }
 
     fn get_persist(&self) -> Persist {
