@@ -141,7 +141,8 @@ impl<S: State> Server<S> {
             return Err(Error::NotLeader { hint });
         }
 
-        let Start { index, .. } = res.unwrap();
+        // TODO: use term to simplify channels
+        let Start { index, term } = res.unwrap();
 
         let rx = self.register(index, channel_id);
         match timeout(Duration::from_millis(500), rx).await {
@@ -164,15 +165,20 @@ impl<S: State> Server<S> {
     }
 
     fn notify(&self, index: u64, channel_id: ChannelId, reply: S::Output) {
-        trace!("CHANNEL S{} notify {index} with {channel_id}", self.me);
         let mut notify_channels = self.notify_channels.lock().unwrap();
-        let Some(channels_with_index) = notify_channels.get_mut(&index) else {return};
+        if self.is_leader() {
+            trace!("CHANNEL S{} notify {index} with {channel_id}", self.me);
+            let Some(channels_with_index) = notify_channels.get_mut(&index) else { return };
 
-        let tx = channels_with_index.remove(&channel_id).unwrap();
-        std::mem::drop(tx.send(reply));
+            let Some(tx) = channels_with_index.remove(&channel_id) else { return };
+            std::mem::drop(tx.send(reply));
 
-        // remove old notify channels
-        notify_channels.remove(&index);
+            // remove old notify channels
+            notify_channels.remove(&index).unwrap();
+        } else {
+            notify_channels.clear();
+        }
+
         assert!(notify_channels.keys().all(|&key| key > index));
     }
 }
