@@ -11,7 +11,7 @@ pub struct OpId {
 
 pub type Reply = String;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Op {
     Get {
         key: String,

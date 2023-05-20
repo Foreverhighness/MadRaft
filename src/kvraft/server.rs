@@ -1,13 +1,17 @@
 use super::msg::*;
-use crate::raft::{self, ApplyMsg};
-use futures::{channel::mpsc::UnboundedReceiver, StreamExt};
-use madsim::{fs, net, task};
+use crate::raft::{self, ApplyMsg, Start};
+use futures::{
+    channel::{mpsc::UnboundedReceiver, oneshot},
+    StreamExt,
+};
+use madsim::{fs, net, task, time::timeout};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fmt::{self, Debug},
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicU64, Arc, Mutex},
+    time::Duration,
 };
 
 pub trait State: net::Message + Default {
@@ -16,11 +20,23 @@ pub trait State: net::Message + Default {
     fn apply(&mut self, cmd: Self::Command) -> Self::Output;
 }
 
+type NotifyChannels<T> = HashMap<u64, HashMap<ChannelId, oneshot::Sender<T>>>;
+
 pub struct Server<S: State> {
     rf: raft::RaftHandle,
     me: usize,
     state: Mutex<S>,
     max_raft_state: Option<usize>,
+
+    notify_channels: Mutex<NotifyChannels<S::Output>>,
+}
+
+type ChannelId = u64;
+
+/// For debugging purposes, this function does not return a random value.
+fn generate_channel_id() -> ChannelId {
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl<S: State> fmt::Debug for Server<S> {
@@ -43,6 +59,7 @@ impl<S: State> Server<S> {
             me,
             state: Mutex::default(),
             max_raft_state,
+            notify_channels: Mutex::default(),
         });
         this.start_rpc_server();
         this.start_applier(apply_ch);
@@ -56,9 +73,9 @@ impl<S: State> Server<S> {
                 let Some(this) = weak.upgrade() else {return};
                 match msg {
                     ApplyMsg::Command { data, index } => {
-                        let cmd = bincode::deserialize(&data).unwrap();
+                        let (channel_id, cmd) = bincode::deserialize(&data).unwrap();
                         let reply = this.state.lock().unwrap().apply(cmd);
-                        this.notify(index);
+                        this.notify(index, channel_id, reply);
                         if this.need_snapshot().await {
                             this.snapshot(index);
                         }
@@ -96,10 +113,6 @@ impl<S: State> Server<S> {
         self.rf.is_leader()
     }
 
-    fn notify(&self, index: u64) {
-        todo!()
-    }
-
     /// Whether the server need snapshot
     async fn need_snapshot(&self) -> bool {
         if let Some(max) = self.max_raft_state {
@@ -120,7 +133,47 @@ impl<S: State> Server<S> {
     }
 
     async fn apply(&self, cmd: S::Command) -> Result<S::Output, Error> {
-        todo!("apply command");
+        let channel_id = generate_channel_id();
+        let cmd = bincode::serialize(&(channel_id, cmd)).unwrap();
+
+        let res = self.rf.start(&cmd).await;
+        if let Err(raft::Error::NotLeader(hint)) = res {
+            return Err(Error::NotLeader { hint });
+        }
+
+        let Start { index, .. } = res.unwrap();
+
+        let rx = self.register(index, channel_id);
+        match timeout(Duration::from_millis(500), rx).await {
+            Ok(Ok(reply)) => Ok(reply),
+            Ok(Err(e)) => Err(Error::Failed),
+            Err(e) => Err(Error::Timeout),
+        }
+    }
+
+    fn register(&self, index: u64, channel_id: ChannelId) -> oneshot::Receiver<S::Output> {
+        trace!("CHANNEL S{} register {index} with {channel_id}", self.me);
+        let mut notify_channels = self.notify_channels.lock().unwrap();
+        let channels_with_index = notify_channels.entry(index).or_default();
+
+        let (tx, rx) = oneshot::channel();
+        let old = channels_with_index.insert(channel_id, tx);
+        assert!(old.is_none());
+
+        rx
+    }
+
+    fn notify(&self, index: u64, channel_id: ChannelId, reply: S::Output) {
+        trace!("CHANNEL S{} notify {index} with {channel_id}", self.me);
+        let mut notify_channels = self.notify_channels.lock().unwrap();
+        let Some(channels_with_index) = notify_channels.get_mut(&index) else {return};
+
+        let tx = channels_with_index.remove(&channel_id).unwrap();
+        std::mem::drop(tx.send(reply));
+
+        // remove old notify channels
+        notify_channels.remove(&index);
+        assert!(notify_channels.keys().all(|&key| key > index));
     }
 }
 
@@ -132,12 +185,46 @@ pub struct Kv {
     // TODO: lab3 remove Vec wrapper
     seen: HashMap<ClientId, Vec<(SequenceNumber, Op, Reply)>>,
 }
+impl Kv {
+    fn check_duplicate(&self, OpId { client_id, seq }: OpId, cmd: &Op) -> Option<Reply> {
+        let vec = self.seen.get(&client_id)?;
+        let (_, ref op, ref reply) = *vec.iter().find(|&&(s, _, _)| s == seq)?;
+        assert_eq!(op, cmd);
+        Some(reply.clone())
+    }
+
+    fn update_seen(&mut self, OpId { client_id, seq }: OpId, cmd: Op, reply: Reply) {
+        // TODO: lab3 remove old seen
+        self.seen
+            .entry(client_id)
+            .or_default()
+            .push((seq, cmd, reply));
+    }
+}
 
 impl State for Kv {
     type Command = Op;
     type Output = String;
 
     fn apply(&mut self, cmd: Self::Command) -> Self::Output {
-        todo!("apply command");
+        // TODO: lab3 remove clone
+        match cmd.clone() {
+            Op::Get { key } => return self.kv.get(&key).cloned().unwrap_or_default(),
+            Op::Put { key, value, id } => {
+                if let Some(reply) = self.check_duplicate(id, &cmd) {
+                    return reply;
+                }
+                *self.kv.entry(key).or_default() = value;
+                self.update_seen(id, cmd, String::new());
+            }
+            Op::Append { key, value, id } => {
+                if let Some(reply) = self.check_duplicate(id, &cmd) {
+                    return reply;
+                }
+                self.kv.entry(key).or_default().push_str(&value);
+                self.update_seen(id, cmd, String::new());
+            }
+        };
+        String::new()
     }
 }
