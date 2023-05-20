@@ -188,23 +188,31 @@ pub type KvServer = Server<Kv>;
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Kv {
     kv: HashMap<String, String>,
-    // TODO: lab3 remove Vec wrapper
-    seen: HashMap<ClientId, Vec<(SequenceNumber, Op, Reply)>>,
+    // TODO: lab4 remove Op and Reply
+    seen: HashMap<ClientId, (SequenceNumber, Op, Reply)>,
 }
 impl Kv {
     fn check_duplicate(&self, OpId { client_id, seq }: OpId, cmd: &Op) -> Option<Reply> {
-        let vec = self.seen.get(&client_id)?;
-        let (_, ref op, ref reply) = *vec.iter().find(|&&(s, _, _)| s == seq)?;
+        let (old_seq, ref op, ref reply) = *self.seen.get(&client_id)?;
+        // TODO: lab4 remove assert
+        assert!(seq - old_seq <= 1);
+        if seq != old_seq {
+            return None;
+        }
+
         assert_eq!(op, cmd);
         Some(reply.clone())
     }
 
+    // TODO: lab4 remove Op and Reply
     fn update_seen(&mut self, OpId { client_id, seq }: OpId, cmd: Op, reply: Reply) {
-        // TODO: lab3 remove old seen
-        self.seen
-            .entry(client_id)
-            .or_default()
-            .push((seq, cmd, reply));
+        trace!("STATE before update {:?}", self.seen);
+        let old = self.seen.insert(client_id, (seq, cmd, reply));
+        // TODO: lab4 remove assert
+        if let Some((old_seq, _, _)) = old {
+            assert_eq!(old_seq + 1, seq);
+        }
+        trace!("STATE after update {:?}", self.seen);
     }
 }
 
@@ -213,7 +221,7 @@ impl State for Kv {
     type Output = String;
 
     fn apply(&mut self, cmd: Self::Command) -> Self::Output {
-        // TODO: lab3 remove clone
+        // TODO: lab4 remove clone
         match cmd.clone() {
             Op::Get { key } => return self.kv.get(&key).cloned().unwrap_or_default(),
             Op::Put { key, value, id } => {
