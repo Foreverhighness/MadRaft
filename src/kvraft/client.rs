@@ -1,5 +1,5 @@
-use super::msg::*;
-use madsim::{net, time::*};
+use super::msg::{ClientId, Error, Op, OpId, Reply};
+use madsim::{net, time::Duration};
 use std::{
     net::SocketAddr,
     sync::atomic::{AtomicUsize, Ordering::Relaxed},

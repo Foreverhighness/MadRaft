@@ -1,4 +1,4 @@
-use super::msg::*;
+use super::msg::{ClientId, Error, Op, OpId, Reply, SequenceNumber};
 use crate::raft::{self, ApplyMsg, Start};
 use futures::{
     channel::{mpsc::UnboundedReceiver, oneshot},
@@ -137,8 +137,8 @@ impl<S: State> Server<S> {
 
         match timeout(Duration::from_millis(500), rx).await {
             Ok(Ok(reply)) => Ok(reply),
-            Ok(Err(e)) => Err(Error::Failed),
-            Err(e) => Err(Error::Timeout),
+            Ok(Err(_)) => Err(Error::Failed),
+            Err(_) => Err(Error::Timeout),
         }
     }
 
