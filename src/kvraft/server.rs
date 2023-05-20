@@ -10,7 +10,7 @@ use std::{
     collections::HashMap,
     fmt::{self, Debug},
     net::SocketAddr,
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -20,7 +20,7 @@ pub trait State: net::Message + Default {
     fn apply(&mut self, cmd: Self::Command) -> Self::Output;
 }
 
-type NotifyChannels<T> = HashMap<u64, (u64, ChannelId, oneshot::Sender<T>)>;
+type NotifyChannels<T> = HashMap<u64, (u64, oneshot::Sender<T>)>;
 
 pub struct Server<S: State> {
     rf: raft::RaftHandle,
@@ -29,14 +29,6 @@ pub struct Server<S: State> {
     max_raft_state: Option<usize>,
 
     notify_channels: Mutex<NotifyChannels<S::Output>>,
-}
-
-type ChannelId = u64;
-
-/// For debugging purposes, this function does not return a random value.
-fn generate_channel_id() -> ChannelId {
-    static COUNT: AtomicU64 = AtomicU64::new(0);
-    COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl<S: State> fmt::Debug for Server<S> {
@@ -73,9 +65,9 @@ impl<S: State> Server<S> {
                 let Some(this) = weak.upgrade() else {return};
                 match msg {
                     ApplyMsg::Command { data, term, index } => {
-                        let (channel_id, cmd) = bincode::deserialize(&data).unwrap();
+                        let cmd = bincode::deserialize(&data).unwrap();
                         let reply = this.state.lock().unwrap().apply(cmd);
-                        this.notify(term, index, channel_id, reply);
+                        this.notify(term, index, reply);
                         if this.need_snapshot().await {
                             this.snapshot(index);
                         }
@@ -133,8 +125,7 @@ impl<S: State> Server<S> {
     }
 
     async fn apply(&self, cmd: S::Command) -> Result<S::Output, Error> {
-        let channel_id = generate_channel_id();
-        let cmd = bincode::serialize(&(channel_id, cmd)).unwrap();
+        let cmd = bincode::serialize(&cmd).unwrap();
 
         let res = self.rf.start(&cmd).await;
         if let Err(raft::Error::NotLeader(hint)) = res {
@@ -142,10 +133,7 @@ impl<S: State> Server<S> {
         }
 
         let Start { index, term } = res.unwrap();
-
-        let rx = self
-            .register(term, index, channel_id)
-            .ok_or(Error::Failed)?;
+        let rx = self.register(term, index).ok_or(Error::Failed)?;
 
         match timeout(Duration::from_millis(500), rx).await {
             Ok(Ok(reply)) => Ok(reply),
@@ -154,35 +142,26 @@ impl<S: State> Server<S> {
         }
     }
 
-    fn register(
-        &self,
-        term: u64,
-        index: u64,
-        channel_id: ChannelId,
-    ) -> Option<oneshot::Receiver<S::Output>> {
-        trace!(
-            "CHANNEL S{} register {index} with {term}-{channel_id}",
-            self.me
-        );
+    fn register(&self, term: u64, index: u64) -> Option<oneshot::Receiver<S::Output>> {
+        trace!("CHANNEL S{} register {index} with {term}", self.me);
         let mut notify_channels = self.notify_channels.lock().unwrap();
 
         let old_term = notify_channels.get(&index).map(|&(term, ..)| term);
         assert_ne!(old_term, Some(term));
         if old_term.map_or(true, |old_term| old_term < term) {
             let (tx, rx) = oneshot::channel();
-            notify_channels.insert(index, (term, channel_id, tx));
+            notify_channels.insert(index, (term, tx));
             return Some(rx);
         }
         None
     }
 
-    fn notify(&self, term: u64, index: u64, channel_id: ChannelId, reply: S::Output) {
+    fn notify(&self, term: u64, index: u64, reply: S::Output) {
         let mut notify_channels = self.notify_channels.lock().unwrap();
         trace!("Channel S{} before notify {:?}", self.me, notify_channels);
 
-        if let Some((ch_term, id, tx)) = notify_channels.remove(&index) {
+        if let Some((ch_term, tx)) = notify_channels.remove(&index) {
             if ch_term == term {
-                assert_eq!(id, channel_id);
                 std::mem::drop(tx.send(reply));
             }
         }
