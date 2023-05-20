@@ -20,7 +20,7 @@ pub trait State: net::Message + Default {
     fn apply(&mut self, cmd: Self::Command) -> Self::Output;
 }
 
-type NotifyChannels<T> = HashMap<u64, HashMap<ChannelId, oneshot::Sender<T>>>;
+type NotifyChannels<T> = HashMap<u64, (u64, ChannelId, oneshot::Sender<T>)>;
 
 pub struct Server<S: State> {
     rf: raft::RaftHandle,
@@ -72,10 +72,10 @@ impl<S: State> Server<S> {
             while let Some(msg) = rx.next().await {
                 let Some(this) = weak.upgrade() else {return};
                 match msg {
-                    ApplyMsg::Command { data, index } => {
+                    ApplyMsg::Command { data, term, index } => {
                         let (channel_id, cmd) = bincode::deserialize(&data).unwrap();
                         let reply = this.state.lock().unwrap().apply(cmd);
-                        this.notify(index, channel_id, reply);
+                        this.notify(term, index, channel_id, reply);
                         if this.need_snapshot().await {
                             this.snapshot(index);
                         }
@@ -141,10 +141,12 @@ impl<S: State> Server<S> {
             return Err(Error::NotLeader { hint });
         }
 
-        // TODO: use term to simplify channels
         let Start { index, term } = res.unwrap();
 
-        let rx = self.register(index, channel_id);
+        let rx = self
+            .register(term, index, channel_id)
+            .ok_or(Error::Failed)?;
+
         match timeout(Duration::from_millis(500), rx).await {
             Ok(Ok(reply)) => Ok(reply),
             Ok(Err(e)) => Err(Error::Failed),
@@ -152,34 +154,53 @@ impl<S: State> Server<S> {
         }
     }
 
-    fn register(&self, index: u64, channel_id: ChannelId) -> oneshot::Receiver<S::Output> {
-        trace!("CHANNEL S{} register {index} with {channel_id}", self.me);
+    fn register(
+        &self,
+        term: u64,
+        index: u64,
+        channel_id: ChannelId,
+    ) -> Option<oneshot::Receiver<S::Output>> {
+        trace!(
+            "CHANNEL S{} register {index} with {term}-{channel_id}",
+            self.me
+        );
         let mut notify_channels = self.notify_channels.lock().unwrap();
-        let channels_with_index = notify_channels.entry(index).or_default();
 
-        let (tx, rx) = oneshot::channel();
-        let old = channels_with_index.insert(channel_id, tx);
-        assert!(old.is_none());
-
-        rx
+        let old_term = notify_channels.get(&index).map(|&(term, ..)| term);
+        assert_ne!(old_term, Some(term));
+        if old_term.map_or(true, |old_term| old_term < term) {
+            let (tx, rx) = oneshot::channel();
+            notify_channels.insert(index, (term, channel_id, tx));
+            return Some(rx);
+        }
+        None
     }
 
-    fn notify(&self, index: u64, channel_id: ChannelId, reply: S::Output) {
+    fn notify(&self, term: u64, index: u64, channel_id: ChannelId, reply: S::Output) {
         let mut notify_channels = self.notify_channels.lock().unwrap();
-        if self.is_leader() {
-            trace!("CHANNEL S{} notify {index} with {channel_id}", self.me);
-            let Some(channels_with_index) = notify_channels.get_mut(&index) else { return };
+        trace!("Channel S{} before notify {:?}", self.me, notify_channels);
 
-            let Some(tx) = channels_with_index.remove(&channel_id) else { return };
-            std::mem::drop(tx.send(reply));
-
-            // remove old notify channels
-            notify_channels.remove(&index).unwrap();
-        } else {
-            notify_channels.clear();
+        if let Some((ch_term, id, tx)) = notify_channels.remove(&index) {
+            if ch_term == term {
+                assert_eq!(id, channel_id);
+                std::mem::drop(tx.send(reply));
+            }
         }
 
-        assert!(notify_channels.keys().all(|&key| key > index));
+        let remove_keys = notify_channels
+            .keys()
+            .filter(|&&k| k < index)
+            .copied()
+            .collect::<Vec<_>>();
+        let removed = remove_keys
+            .into_iter()
+            .map(|k| notify_channels.remove(&k).unwrap())
+            .collect::<Vec<_>>();
+        if !removed.is_empty() {
+            trace!("Channel S{} delete obsolete {:?}", self.me, removed);
+        }
+
+        trace!("Channel S{} after notify {:?}", self.me, notify_channels);
     }
 }
 
@@ -191,6 +212,7 @@ pub struct Kv {
     // TODO: lab4 remove Op and Reply
     seen: HashMap<ClientId, (SequenceNumber, Op, Reply)>,
 }
+
 impl Kv {
     fn check_duplicate(&self, OpId { client_id, seq }: OpId, cmd: &Op) -> Option<Reply> {
         let (old_seq, ref op, ref reply) = *self.seen.get(&client_id)?;
@@ -209,7 +231,7 @@ impl Kv {
         trace!("STATE before update {:?}", self.seen);
         let old = self.seen.insert(client_id, (seq, cmd, reply));
         // TODO: lab4 remove assert
-        if let Some((old_seq, _, _)) = old {
+        if let Some((old_seq, ..)) = old {
             assert_eq!(old_seq + 1, seq);
         }
         trace!("STATE after update {:?}", self.seen);

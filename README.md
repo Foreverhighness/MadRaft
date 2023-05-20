@@ -10,6 +10,8 @@ But when using the `Drop` scheme, I cannot use `Arc<Mutex<Raft>>` freely. This i
 ## lab3
 `ClerkCore` just call appropriate RPC handler and guarantee success. Because `Clerk` need sequence number to indicate duplicate request, so clerk need additional `seq` property, but `ClerkCore` does not need.
 
+If `start` returns the same `index`, only the highest `term` will be applied. According to the `Log Matching` property, we can use `(index, term)` tuple to indicate a unique operation, and then send back a response to the corresponding client.
+
 ## lab4
 My go implementation of the shard server is leader to handle everything, but wry's approach is much better than mine. It allows follower to fetch the latest config and then use an RPC call to notify leader to handle that config change event, which improves system availability but increases RPC traffic.
 

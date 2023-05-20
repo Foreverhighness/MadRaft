@@ -30,6 +30,7 @@ pub type MsgRecver = mpsc::UnboundedReceiver<ApplyMsg>;
 pub enum ApplyMsg {
     Command {
         data: Vec<u8>,
+        term: u64,
         index: u64,
     },
     // For 2D:
@@ -357,10 +358,16 @@ impl Raft {
                     index: index as u64,
                 }
             } else {
-                let data = self.logs[applied_index].data.clone();
+                let LogEntry {
+                    ref data,
+                    term,
+                    index,
+                } = self.logs[applied_index];
+                assert_eq!(index, applied_index);
                 ApplyMsg::Command {
-                    data,
-                    index: applied_index as u64,
+                    data: data.clone(),
+                    term,
+                    index: index as u64,
                 }
             };
 
