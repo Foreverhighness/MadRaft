@@ -87,10 +87,9 @@ impl<S: State> Server<S> {
     fn start_rpc_server(self: &Arc<Self>) {
         let net = net::NetLocalHandle::current();
 
-        // TODO: lab3 replace with weak pointer
-        let this = Arc::clone(self);
+        let weak = Arc::downgrade(self);
         net.add_rpc_handler(move |cmd: S::Command| {
-            let this = Arc::clone(&this);
+            let this = weak.upgrade().unwrap();
             async move { this.apply(cmd).await }
         });
     }

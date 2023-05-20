@@ -470,7 +470,7 @@ impl Raft {
         i: usize,
     ) {
         trace!(
-            "HEARTBEAT S{} handle S{i} append entries reply {reply:?} at T{}",
+            "HEART S{} handle S{i} append entries reply {reply:?} at T{}",
             self.me,
             self.state.term
         );

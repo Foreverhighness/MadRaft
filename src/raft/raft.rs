@@ -21,6 +21,10 @@ pub struct RaftHandle {
     inner: Arc<Mutex<Raft>>,
 }
 
+struct WeakHandle {
+    inner: Weak<Mutex<Raft>>,
+}
+
 type MsgSender = mpsc::UnboundedSender<ApplyMsg>;
 pub type MsgRecver = mpsc::UnboundedReceiver<ApplyMsg>;
 
@@ -294,20 +298,20 @@ impl RaftHandle {
     fn start_rpc_server(&self) {
         let net = net::NetLocalHandle::current();
 
-        let this = self.clone();
+        let weak = self.weak();
         net.add_rpc_handler(move |args: RequestVoteArgs| {
-            let this = this.clone();
+            let this = weak.upgrade().unwrap();
             async move { this.request_vote(&args).await.unwrap() }
         });
         // add more RPC handlers here
-        let this = self.clone();
+        let weak = self.weak();
         net.add_rpc_handler(move |args: AppendEntriesArgs| {
-            let this = this.clone();
+            let this = weak.upgrade().unwrap();
             async move { this.append_entries(args).await.unwrap() }
         });
-        let this = self.clone();
+        let weak = self.weak();
         net.add_rpc_handler(move |args: InstallSnapshotArgs| {
-            let this = this.clone();
+            let this = weak.upgrade().unwrap();
             async move { this.install_snapshot(args).await.unwrap() }
         });
     }
@@ -432,4 +436,19 @@ impl Raft {
     /// persist Raft state (not used because we don't use blocked io)
     #[allow(clippy::unused_self)]
     const fn persist(&self) {}
+}
+
+impl RaftHandle {
+    fn weak(&self) -> WeakHandle {
+        WeakHandle {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+}
+
+impl WeakHandle {
+    fn upgrade(&self) -> Option<RaftHandle> {
+        let inner = self.inner.upgrade()?;
+        Some(RaftHandle { inner })
+    }
 }
