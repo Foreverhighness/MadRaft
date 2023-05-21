@@ -9,8 +9,6 @@ pub struct OpId {
     pub seq: SequenceNumber,
 }
 
-pub type Reply = String;
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Op {
     Get {

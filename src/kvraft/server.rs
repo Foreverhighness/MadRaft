@@ -1,4 +1,4 @@
-use super::msg::{ClientId, Error, Op, OpId, Reply, SequenceNumber};
+use super::msg::{ClientId, Error, Op, OpId, SequenceNumber};
 use crate::raft::{self, ApplyMsg, Start};
 use futures::{
     channel::{mpsc::UnboundedReceiver, oneshot},
@@ -187,29 +187,30 @@ pub type KvServer = Server<Kv>;
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Kv {
     kv: HashMap<String, String>,
-    // TODO: lab4 remove Op and Reply
-    seen: HashMap<ClientId, (SequenceNumber, Op, Reply)>,
+    seen: Seen,
 }
 
-impl Kv {
-    fn check_duplicate(&self, OpId { client_id, seq }: OpId, cmd: &Op) -> Option<Reply> {
-        let (old_seq, ref op, ref reply) = *self.seen.get(&client_id)?;
-        // TODO: lab4 remove assert
-        assert!(seq - old_seq <= 1);
-        if seq != old_seq {
-            return None;
-        }
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Seen {
+    seen: HashMap<ClientId, SequenceNumber>,
+}
 
-        assert_eq!(op, cmd);
-        Some(reply.clone())
+impl Seen {
+    pub fn is_duplicate(&self, OpId { client_id, seq }: OpId) -> bool {
+        if let Some(&old_seq) = self.seen.get(&client_id) {
+            // TODO: lab4b remove assert
+            assert!(seq - old_seq <= 1);
+            seq == old_seq
+        } else {
+            false
+        }
     }
 
-    // TODO: lab4 remove Op and Reply
-    fn update_seen(&mut self, OpId { client_id, seq }: OpId, cmd: Op, reply: Reply) {
+    pub fn update(&mut self, OpId { client_id, seq }: OpId) {
         trace!("STATE before update {:?}", self.seen);
-        let old = self.seen.insert(client_id, (seq, cmd, reply));
-        // TODO: lab4 remove assert
-        if let Some((old_seq, ..)) = old {
+        let old = self.seen.insert(client_id, seq);
+        // TODO: lab4b remove assert
+        if let Some(old_seq) = old {
             assert_eq!(old_seq + 1, seq);
         }
         trace!("STATE after update {:?}", self.seen);
@@ -221,22 +222,21 @@ impl State for Kv {
     type Output = String;
 
     fn apply(&mut self, cmd: Self::Command) -> Self::Output {
-        // TODO: lab4 remove clone
-        match cmd.clone() {
+        match cmd {
             Op::Get { key } => return self.kv.get(&key).cloned().unwrap_or_default(),
             Op::Put { key, value, id } => {
-                if let Some(reply) = self.check_duplicate(id, &cmd) {
-                    return reply;
+                if !self.seen.is_duplicate(id) {
+                    self.seen.update(id);
+
+                    *self.kv.entry(key).or_default() = value;
                 }
-                *self.kv.entry(key).or_default() = value;
-                self.update_seen(id, cmd, String::new());
             }
             Op::Append { key, value, id } => {
-                if let Some(reply) = self.check_duplicate(id, &cmd) {
-                    return reply;
+                if !self.seen.is_duplicate(id) {
+                    self.seen.update(id);
+
+                    self.kv.entry(key).or_default().push_str(&value);
                 }
-                self.kv.entry(key).or_default().push_str(&value);
-                self.update_seen(id, cmd, String::new());
             }
         };
         String::new()

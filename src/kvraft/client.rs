@@ -1,4 +1,4 @@
-use super::msg::{ClientId, Error, Op, OpId, Reply};
+use super::msg::{ClientId, Error, Op, OpId};
 use madsim::{net, time::Duration};
 use std::{
     net::SocketAddr,
@@ -6,7 +6,7 @@ use std::{
 };
 
 pub struct Clerk {
-    core: ClerkCore<Op, Reply>,
+    core: ClerkCore<Op, String>,
 
     seq: AtomicUsize,
 }
@@ -29,7 +29,7 @@ impl Clerk {
     /// fetch the current value for a key.
     /// returns "" if the key does not exist.
     /// keeps trying forever in the face of all other errors.
-    pub async fn get(&self, key: String) -> Reply {
+    pub async fn get(&self, key: String) -> String {
         self.core.call(Op::Get { key }).await
     }
 

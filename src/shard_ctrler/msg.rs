@@ -1,4 +1,5 @@
 use super::N_SHARDS;
+use crate::kvraft::msg::OpId;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, net::SocketAddr};
 
@@ -26,12 +27,15 @@ pub enum Op {
     Join {
         /// new GID -> servers mappings
         groups: HashMap<Gid, Vec<SocketAddr>>,
+        id: OpId,
     },
     Leave {
         gids: Vec<Gid>,
+        id: OpId,
     },
     Move {
         shard: usize,
         gid: Gid,
+        id: OpId,
     },
 }
