@@ -1,4 +1,4 @@
-use super::msg::*;
+use super::msg::{Config, Gid, Op};
 use crate::kvraft::{client::ClerkCore, msg::OpId};
 use std::{
     collections::HashMap,
