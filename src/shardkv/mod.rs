@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 #![allow(clippy::wildcard_imports)]
 #![allow(clippy::unused_async)]
+#![allow(unused_variables)]
+#![allow(unreachable_code)]
 pub mod client;
 pub mod msg;
 pub mod server;

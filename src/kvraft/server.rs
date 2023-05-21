@@ -104,6 +104,10 @@ impl<S: State> Server<S> {
         self.rf.is_leader()
     }
 
+    pub const fn state(&self) -> &Mutex<S> {
+        &self.state
+    }
+
     /// Whether the server need snapshot
     async fn need_snapshot(&self) -> bool {
         if let Some(max) = self.max_raft_state {
@@ -198,8 +202,7 @@ pub struct Seen {
 impl Seen {
     pub fn is_duplicate(&self, OpId { client_id, seq }: OpId) -> bool {
         if let Some(&old_seq) = self.seen.get(&client_id) {
-            // TODO: lab4b remove assert
-            assert!(seq - old_seq <= 1);
+            assert!(old_seq < seq);
             seq == old_seq
         } else {
             false
@@ -209,9 +212,8 @@ impl Seen {
     pub fn update(&mut self, OpId { client_id, seq }: OpId) {
         trace!("STATE before update {:?}", self.seen);
         let old = self.seen.insert(client_id, seq);
-        // TODO: lab4b remove assert
         if let Some(old_seq) = old {
-            assert_eq!(old_seq + 1, seq);
+            assert!(old_seq < seq);
         }
         trace!("STATE after update {:?}", self.seen);
     }

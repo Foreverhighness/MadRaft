@@ -20,6 +20,10 @@ impl Clerk {
         }
     }
 
+    pub const fn me(&self) -> usize {
+        self.core.me
+    }
+
     fn op_id(&self) -> OpId {
         OpId {
             client_id: self.core.me,
