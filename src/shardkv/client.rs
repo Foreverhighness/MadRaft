@@ -82,6 +82,7 @@ impl Clerk {
                     Ok(reply) => match reply {
                         Reply::Get { .. } | Reply::Ok => return reply,
                         Reply::WrongGroup => sleep(Duration::from_millis(100)).await,
+                        Reply::PullShards { .. } => unreachable!(),
                     },
                     Err(e) => trace!("CLIENT C{me} got error from G{gid} {e:?}"),
                 }

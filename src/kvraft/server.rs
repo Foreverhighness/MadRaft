@@ -188,34 +188,47 @@ impl<S: State> Server<S> {
 
 pub type KvServer = Server<Kv>;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct Kv {
     kv: HashMap<String, String>,
     seen: Seen,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+impl Kv {
+    pub const fn new(kv: HashMap<String, String>, seen: Seen) -> Self {
+        Self { kv, seen }
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct Seen {
-    seen: HashMap<ClientId, SequenceNumber>,
+    inner: HashMap<ClientId, SequenceNumber>,
 }
 
 impl Seen {
     pub fn is_duplicate(&self, OpId { client_id, seq }: OpId) -> bool {
-        if let Some(&old_seq) = self.seen.get(&client_id) {
+        self.inner.get(&client_id).map_or(false, |&old_seq| {
             assert!(old_seq < seq);
             seq == old_seq
-        } else {
-            false
-        }
+        })
     }
 
     pub fn update(&mut self, OpId { client_id, seq }: OpId) {
-        trace!("STATE before update {:?}", self.seen);
-        let old = self.seen.insert(client_id, seq);
+        trace!("STATE before update {:?}", self.inner);
+        let old = self.inner.insert(client_id, seq);
         if let Some(old_seq) = old {
             assert!(old_seq < seq);
         }
-        trace!("STATE after update {:?}", self.seen);
+        trace!("STATE after update {:?}", self.inner);
+    }
+
+    pub fn install(&mut self, seen: Seen) {
+        for (id, seq) in seen.inner {
+            self.inner
+                .entry(id)
+                .and_modify(|s| *s = seq.max(*s))
+                .or_insert(seq);
+        }
     }
 }
 

@@ -15,6 +15,8 @@ If `start` returns the same `index`, only the highest `term` will be applied. Ac
 ## lab4
 My go implementation of the shard server is leader to handle everything, but wry's approach is much better than mine. It allows follower to fetch the latest config and then use an RPC call to notify leader to handle that config change event, which improves system availability but increases RPC traffic.
 
+Every request eventually goes into the raft log, so there is no way to create a live lock. A live lock means that a leader cannot advance its `commit_index` because there is no entry with its current term.
+
 # MadRaft
 
 [![CI](https://github.com/madsys-dev/madraft/workflows/CI/badge.svg?branch=main)](https://github.com/madsys-dev/madraft/actions)
