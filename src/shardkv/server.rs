@@ -25,7 +25,7 @@ static USE_PULL: bool = false;
 static GARBAGE_COLLECT: bool = true;
 static HANDLE_REQUEST_DURING_MIGRATION: bool = true;
 
-const QUERY_TIMEOUT: Duration = Duration::from_millis(1000);
+const QUERY_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct ShardKvServer {
     inner: Arc<Server<ShardKv>>,
