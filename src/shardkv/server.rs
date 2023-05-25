@@ -22,8 +22,8 @@ use std::{
 };
 
 static USE_PULL: bool = false;
-static GARBAGE_COLLECT: bool = false;
-static HANDLE_REQUEST_DURING_MIGRATION: bool = false;
+static GARBAGE_COLLECT: bool = true;
+static HANDLE_REQUEST_DURING_MIGRATION: bool = true;
 
 const QUERY_TIMEOUT: Duration = Duration::from_millis(1000);
 
@@ -228,7 +228,7 @@ pub struct ShardKv {
 
 impl ShardKv {
     fn is_pulling(&self, shard: usize) -> bool {
-        todo!()
+        self.pull.keys().any(|shards| shards.contains(&shard))
     }
 
     fn can_serve(&self, key: &str) -> bool {
