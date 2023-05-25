@@ -14,19 +14,24 @@ use madsim::{
     time::{sleep, timeout},
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+    sync::Arc,
+    time::Duration,
+};
 
 static USE_PULL: bool = false;
-static DELETE_AFTER_INSTALL: bool = false;
+static GARBAGE_COLLECT: bool = false;
 static HANDLE_REQUEST_DURING_MIGRATION: bool = false;
 
-const QUERY_TIMEOUT: Duration = Duration::from_millis(500);
+const QUERY_TIMEOUT: Duration = Duration::from_millis(1000);
 
 pub struct ShardKvServer {
     inner: Arc<Server<ShardKv>>,
     ctrl_ck: CtrlerClerk,
     self_ck: ClerkCore<Op, Reply>,
-    gid: u64,
+    me: u64,
 }
 
 impl ShardKvServer {
@@ -43,7 +48,7 @@ impl ShardKvServer {
             inner,
             ctrl_ck,
             self_ck,
-            gid,
+            me: gid,
         });
         this.inner.state().lock().unwrap().me = gid;
         this.spawn_fetcher();
@@ -61,6 +66,7 @@ impl ShardKvServer {
             loop {
                 let Some(this) = weak.upgrade() else { return };
                 this.fetch_config().await;
+                drop(this);
                 sleep(Duration::from_millis(300)).await;
             }
         })
@@ -75,17 +81,24 @@ impl ShardKvServer {
         if config.num != num {
             return;
         }
-        self.spawn_new_config(config);
+        self.spawn_self_op(Op::NewConfig { config });
     }
 
-    fn spawn_new_config(self: &Arc<Self>, config: Config) {
+    fn spawn_self_op(self: &Arc<Self>, op: Op) {
+        if USE_PULL {
+            assert!(matches!(
+                op,
+                Op::NewConfig { .. } | Op::InstallShards { .. }
+            ));
+        } else {
+            assert!(matches!(op, Op::NewConfig { .. } | Op::DelShards { .. }));
+        }
         let weak = Arc::downgrade(self);
         task::spawn(async move {
             let Some(this) = weak.upgrade() else { return };
-            let apply_config = this.self_ck.call(Op::NewConfig { config });
-            let apply_config = timeout(QUERY_TIMEOUT, apply_config);
-            let Ok(reply) = apply_config.await else { return };
-            assert!(matches!(reply, Reply::Ok));
+            let request = this.self_ck.call(op);
+            let request = timeout(QUERY_TIMEOUT, request);
+            let Ok(Reply::Ok) = request.await else { return };
         })
         .detach();
     }
@@ -96,6 +109,17 @@ impl ShardKvServer {
             loop {
                 let Some(this) = weak.upgrade() else { return };
                 this.do_push().await;
+                {
+                    let state = this.inner.state().lock().unwrap();
+                    info!(
+                        "CONFIG G{} now push:{:?}, pull:{:?} at T{}",
+                        this.me,
+                        state.push.keys(),
+                        state.pull.keys(),
+                        state.config.num
+                    );
+                }
+                drop(this);
                 sleep(Duration::from_millis(300)).await;
             }
         })
@@ -107,14 +131,64 @@ impl ShardKvServer {
         if !need_push {
             return;
         }
-        let push_value = {
-            let state = self.inner.state().lock().unwrap();
-            let num = state.config.num;
-            state.push.clone()
-        };
+        let args = self.inner.state().lock().unwrap().push_args();
+        let me = self.me;
+        trace!("PUSH G{me} send push args: {args:?}");
+
+        for (servers, config_id, shards, kv, seen) in args {
+            let weak = Arc::downgrade(self);
+            let del = Op::DelShards {
+                config_id,
+                shards: shards.clone(),
+            };
+            let callback = move || {
+                let Some(this) = weak.upgrade() else { return };
+                trace!("DELETE G{me} send delete {del:?}");
+                this.spawn_self_op(del);
+            };
+            let op = Op::InstallShards {
+                config_id,
+                shards,
+                kv,
+                seen,
+            };
+            Self::spawn_server_op(servers, op, callback);
+        }
+    }
+
+    fn spawn_server_op(servers: Vec<SocketAddr>, op: Op, callback: impl FnOnce() + Send + 'static) {
+        if USE_PULL {
+            assert!(matches!(op, Op::PullShards { .. } | Op::DelShards { .. }));
+        } else {
+            assert!(matches!(op, Op::InstallShards { .. }));
+        }
+        let clerk = ClerkCore::<Op, Reply>::new(servers);
+
+        task::spawn(async move {
+            let request = clerk.call(op);
+            let request = timeout(QUERY_TIMEOUT, request);
+            let Ok(reply) = request.await else { return };
+            trace!("PUSH_REPLY {reply:?}");
+            if let Reply::Ok = reply {
+                callback();
+            }
+        })
+        .detach();
     }
 
     fn spawn_puller(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        task::spawn(async move {
+            loop {
+                let Some(this) = weak.upgrade() else { return };
+                this.do_pull().await;
+                sleep(Duration::from_millis(300)).await;
+            }
+        })
+        .detach();
+    }
+
+    async fn do_pull(self: &Arc<Self>) {
         todo!()
     }
 }
@@ -127,8 +201,8 @@ pub struct ShardKv {
     me: Gid,
     config: Config,
 
-    pull: HashMap<ConfigId, (Vec<usize>, Vec<SocketAddr>)>,
-    push: HashMap<ConfigId, (Vec<usize>, Vec<SocketAddr>)>,
+    pull: HashMap<Vec<usize>, Vec<SocketAddr>>,
+    push: HashMap<Vec<usize>, Vec<SocketAddr>>,
 }
 
 impl ShardKv {
@@ -137,7 +211,8 @@ impl ShardKv {
     }
 
     fn can_serve(&self, key: &str) -> bool {
-        if self.me == 0 {
+        let me = self.me;
+        if me == 0 {
             return false;
         }
         let shard = key2shard(key);
@@ -158,34 +233,90 @@ impl ShardKv {
         !self.is_pulling(shard)
     }
 
-    fn start_pull(&mut self, config: &Config) {
-        let me = self.me;
-        let mut config = config.clone();
-        task::spawn(async move {
-            let self_ck = ClerkCore::<Op, Reply>::new(config.groups.remove(&me).unwrap());
-            let pull = vec![0];
+    fn config_migrate(&mut self, new_config: &Config) {
+        if self.config.groups.is_empty() || new_config.groups.is_empty() {
+            return;
+        }
+        let old_shards = self
+            .config
+            .shards
+            .iter()
+            .enumerate()
+            .filter(|&(_, &gid)| gid == self.me)
+            .map(|(s, _)| s)
+            .collect::<HashSet<_>>();
+        let new_shards = new_config
+            .shards
+            .iter()
+            .enumerate()
+            .filter(|&(_, &gid)| gid == self.me)
+            .map(|(s, _)| s)
+            .collect::<HashSet<_>>();
+        let diff = old_shards
+            .symmetric_difference(&new_shards)
+            .copied()
+            .collect::<HashSet<_>>();
+        assert_eq!(diff.len(), old_shards.len().abs_diff(new_shards.len()));
 
-            for shard in pull {}
-        })
-        .detach();
-    }
-
-    fn start_push(&mut self, config: &Config) {}
-
-    fn config_migrate(&mut self, config: &Config) {
-        if USE_PULL {
-            self.start_pull(config);
-        } else {
-            self.start_push(config);
+        match old_shards.len().cmp(&new_shards.len()) {
+            std::cmp::Ordering::Less => {
+                // pull
+                // TODO: group by gid
+                let config = &self.config;
+                for shard in diff {
+                    let gid = config.shards[shard];
+                    self.pull.insert(vec![shard], config.groups[&gid].clone());
+                }
+            }
+            std::cmp::Ordering::Greater => {
+                // push
+                // TODO: group by gid
+                let config = new_config;
+                for shard in diff {
+                    let gid = config.shards[shard];
+                    self.push.insert(vec![shard], config.groups[&gid].clone());
+                }
+            }
+            std::cmp::Ordering::Equal => assert_eq!(old_shards, new_shards),
         }
     }
+
+    fn push_args(&self) -> Vec<Ret> {
+        // TODO: rewrite with for loop
+        let config_id = self.config.num;
+        self.push
+            .iter()
+            .map(move |(shards, servers)| {
+                let (shards, servers) = (shards.clone(), servers.clone());
+                let kv = self
+                    .kv
+                    .iter()
+                    .filter(|&(key, value)| shards.contains(&key2shard(key)))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect();
+                let seen = self.seen.clone();
+                (servers, config_id, shards, kv, seen)
+            })
+            .collect()
+    }
 }
+
+type Ret = (
+    Vec<SocketAddr>,
+    ConfigId,
+    Vec<usize>,
+    HashMap<String, String>,
+    Seen,
+);
 
 impl State for ShardKv {
     type Command = Op;
     type Output = Reply;
 
     fn apply(&mut self, cmd: Self::Command) -> Self::Output {
+        let me = self.me;
+        let num = self.config.num;
+        trace!("APPLY G{me} apply {cmd:?} at T{num}");
         match cmd {
             Op::Get { key } => {
                 if !self.can_serve(&key) {
@@ -216,39 +347,87 @@ impl State for ShardKv {
                 }
             }
             Op::NewConfig { config } => {
-                let config_ok = config.num == self.config.num + 1;
-                let can_advance = self.pull.is_empty();
-                if config_ok && can_advance {
-                    info!("CONFIG {:?} -> {:?}", self.config, config);
+                match config.num.cmp(&(self.config.num + 1)) {
+                    std::cmp::Ordering::Less => return Reply::Ok,
+                    std::cmp::Ordering::Greater => return Reply::WrongConfig,
+                    std::cmp::Ordering::Equal => (),
+                }
+
+                let can_advance = self.pull.is_empty() && self.push.is_empty();
+                if can_advance {
+                    info!("CONFIG G{me} {:?} -> {config:?}", self.config);
                     self.config_migrate(&config);
                     self.config = config;
+                    info!(
+                        "CONFIG G{me} now push:{:?}, pull:{:?} at T{}",
+                        self.push.keys(),
+                        self.pull.keys(),
+                        self.config.num
+                    );
                 }
             }
-            Op::PullShards { shard, config_id } => {
+            Op::PullShards { config_id, shards } => {
                 assert!(USE_PULL);
-                if config_id == self.config.num {
-                    let shards = self
-                        .kv
-                        .iter()
-                        .filter(|&(key, _)| key2shard(key) == shard)
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect::<HashMap<_, _>>();
-                    let seen = self.seen.clone();
-                    return Reply::PullShards { shards, seen };
+                todo!();
+                match config_id.cmp(&self.config.num) {
+                    std::cmp::Ordering::Less => return Reply::Ok,
+                    std::cmp::Ordering::Greater => return Reply::WrongConfig,
+                    std::cmp::Ordering::Equal => (),
                 }
+                let shards = self
+                    .kv
+                    .iter()
+                    .filter(|&(key, _)| shards.contains(&key2shard(key)))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                let seen = self.seen.clone();
+                return Reply::PullShards { shards, seen };
             }
             Op::InstallShards {
                 config_id,
                 shards,
+                kv,
                 seen,
             } => {
-                if config_id == self.config.num {
-                    self.kv.extend(shards);
+                match config_id.cmp(&self.config.num) {
+                    std::cmp::Ordering::Less => return Reply::Ok,
+                    std::cmp::Ordering::Greater => return Reply::WrongConfig,
+                    std::cmp::Ordering::Equal => (),
+                }
+                let ret = self.pull.remove(&shards);
+                if ret.is_some() {
+                    self.kv.extend(kv);
                     self.seen.install(seen);
                 }
+                info!(
+                    "INSTALL G{me} install {shards:?}, now pull: {:?} at T{config_id}",
+                    self.pull.keys()
+                );
             }
-            Op::DelShards { shard, config_id } => {
-                assert!(DELETE_AFTER_INSTALL);
+            Op::DelShards { config_id, shards } => {
+                match config_id.cmp(&self.config.num) {
+                    std::cmp::Ordering::Less => return Reply::Ok,
+                    std::cmp::Ordering::Greater => return Reply::WrongConfig,
+                    std::cmp::Ordering::Equal => (),
+                }
+                let ret = self.push.remove(&shards);
+                if GARBAGE_COLLECT {
+                    let removed_keys = self
+                        .kv
+                        .keys()
+                        .filter(|&key| shards.contains(&key2shard(key)))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    assert!(ret.is_some() || removed_keys.is_empty());
+
+                    for key in removed_keys {
+                        assert!(self.kv.remove(&key).is_some());
+                    }
+                }
+                info!(
+                    "DELETE G{me} delete {shards:?}, now push: {:?} at T{config_id}",
+                    self.push.keys()
+                );
             }
         }
         Reply::Ok

@@ -208,7 +208,7 @@ pub struct Seen {
 impl Seen {
     pub fn is_duplicate(&self, OpId { client_id, seq }: OpId) -> bool {
         self.inner.get(&client_id).map_or(false, |&old_seq| {
-            assert!(old_seq < seq);
+            assert!(old_seq <= seq);
             seq == old_seq
         })
     }

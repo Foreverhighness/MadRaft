@@ -63,7 +63,7 @@ impl Clerk {
     async fn call(&self, args: Op) -> Reply {
         let me = self.me();
         let shard = key2shard(args.key());
-        trace!("CLIENT C{me} call args {args:?}");
+        trace!("CLIENT C{me} call args shard({shard}) {args:?}");
 
         let mut config = self.config.lock().await;
         loop {
@@ -79,11 +79,14 @@ impl Clerk {
                 let core = ClerkCoreRef::<Op, Reply>::new(servers, leader, me);
 
                 match timeout(Duration::from_secs(1), core.call(args.clone())).await {
-                    Ok(reply) => match reply {
-                        Reply::Get { .. } | Reply::Ok => return reply,
-                        Reply::WrongGroup => sleep(Duration::from_millis(100)).await,
-                        Reply::PullShards { .. } => unreachable!(),
-                    },
+                    Ok(reply) => {
+                        trace!("CLIENT C{me} get reply from G{gid} {reply:?}");
+                        match reply {
+                            Reply::Get { .. } | Reply::Ok => return reply,
+                            Reply::WrongGroup => sleep(Duration::from_millis(100)).await,
+                            _ => unreachable!(),
+                        }
+                    }
                     Err(e) => trace!("CLIENT C{me} got error from G{gid} {e:?}"),
                 }
             }

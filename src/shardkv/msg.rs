@@ -25,16 +25,17 @@ pub enum Op {
     },
     PullShards {
         config_id: ConfigId,
-        shard: usize,
+        shards: Vec<usize>,
     },
     InstallShards {
         config_id: ConfigId,
-        shards: HashMap<String, String>,
+        shards: Vec<usize>,
+        kv: HashMap<String, String>,
         seen: Seen,
     },
     DelShards {
         config_id: ConfigId,
-        shard: usize,
+        shards: Vec<usize>,
     },
 }
 
@@ -49,4 +50,5 @@ pub enum Reply {
     },
     Ok,
     WrongGroup,
+    WrongConfig,
 }
