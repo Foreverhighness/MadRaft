@@ -6,6 +6,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstallShards {
+    pub config_id: ConfigId,
+    pub shards: Vec<usize>,
+    pub kv: HashMap<String, String>,
+    pub seen: Seen,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteShards {
+    pub config_id: ConfigId,
+    pub shards: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Op {
     Get {
         key: String,
@@ -27,16 +41,8 @@ pub enum Op {
         config_id: ConfigId,
         shards: Vec<usize>,
     },
-    InstallShards {
-        config_id: ConfigId,
-        shards: Vec<usize>,
-        kv: HashMap<String, String>,
-        seen: Seen,
-    },
-    DelShards {
-        config_id: ConfigId,
-        shards: Vec<usize>,
-    },
+    InstallShards(InstallShards),
+    DeleteShards(DeleteShards),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,7 +51,7 @@ pub enum Reply {
         value: Option<String>,
     },
     PullShards {
-        shards: HashMap<String, String>,
+        kv: HashMap<String, String>,
         seen: Seen,
     },
     Ok,
