@@ -21,6 +21,7 @@ pub struct RaftHandle {
     inner: Arc<Mutex<Raft>>,
 }
 
+#[derive(Clone)]
 struct WeakHandle {
     inner: Weak<Mutex<Raft>>,
 }
@@ -300,19 +301,37 @@ impl RaftHandle {
 
         let weak = self.weak();
         net.add_rpc_handler(move |args: RequestVoteArgs| {
-            let this = weak.upgrade().unwrap();
-            async move { this.request_vote(&args).await.unwrap() }
+            let weak = weak.clone();
+            async move {
+                if let Some(this) = weak.upgrade() {
+                    this.request_vote(&args).await.unwrap()
+                } else {
+                    Default::default()
+                }
+            }
         });
         // add more RPC handlers here
         let weak = self.weak();
         net.add_rpc_handler(move |args: AppendEntriesArgs| {
-            let this = weak.upgrade().unwrap();
-            async move { this.append_entries(args).await.unwrap() }
+            let weak = weak.clone();
+            async move {
+                if let Some(this) = weak.upgrade() {
+                    this.append_entries(args).await.unwrap()
+                } else {
+                    Default::default()
+                }
+            }
         });
         let weak = self.weak();
         net.add_rpc_handler(move |args: InstallSnapshotArgs| {
-            let this = weak.upgrade().unwrap();
-            async move { this.install_snapshot(args).await.unwrap() }
+            let weak = weak.clone();
+            async move {
+                if let Some(this) = weak.upgrade() {
+                    this.install_snapshot(args).await.unwrap()
+                } else {
+                    Default::default()
+                }
+            }
         });
     }
 }

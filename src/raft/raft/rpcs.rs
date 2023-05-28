@@ -19,7 +19,7 @@ pub struct RequestVoteArgs {
     last_log_index: usize,
 }
 
-#[derive(Clone, Deserialize, Serialize, Debug)]
+#[derive(Clone, Deserialize, Serialize, Debug, Default)]
 pub struct RequestVoteReply {
     term: u64,
     vote_granted: bool,
@@ -605,7 +605,7 @@ pub struct InstallSnapshotArgs {
     data: Vec<u8>,
 }
 
-#[derive(Clone, Deserialize, Serialize, Debug)]
+#[derive(Clone, Deserialize, Serialize, Debug, Default)]
 pub struct InstallSnapshotReply {
     term: u64,
 }
