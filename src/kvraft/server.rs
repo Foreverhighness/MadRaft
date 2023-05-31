@@ -89,8 +89,14 @@ impl<S: State> Server<S> {
 
         let weak = Arc::downgrade(self);
         net.add_rpc_handler(move |cmd: S::Command| {
-            let this = weak.upgrade().unwrap();
-            async move { this.apply(cmd).await }
+            let weak = weak.clone();
+            async move {
+                if let Some(this) = weak.upgrade() {
+                    this.apply(cmd).await
+                } else {
+                    Err(Error::Failed)
+                }
+            }
         });
     }
 
@@ -127,7 +133,7 @@ impl<S: State> Server<S> {
         task::spawn(async move { raft.snapshot(index, &snapshot).await }).detach();
     }
 
-    async fn apply(&self, cmd: S::Command) -> Result<S::Output, Error> {
+    pub async fn apply(&self, cmd: S::Command) -> Result<S::Output, Error> {
         let cmd = bincode::serialize(&cmd).unwrap();
 
         let res = self.rf.start(&cmd).await;

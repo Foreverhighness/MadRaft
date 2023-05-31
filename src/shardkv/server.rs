@@ -78,9 +78,9 @@ impl ShardKvServer {
         let fetch_config = self.ctrl_ck.query_at(num);
         let fetch_config = timeout(QUERY_TIMEOUT, fetch_config);
         let Ok(config) = fetch_config.await else { return };
-        // if config.num != num {
-        //     return;
-        // }
+        if config.num != num {
+            return;
+        }
         self.spawn_self_op(Op::NewConfig { config });
     }
 
@@ -96,6 +96,7 @@ impl ShardKvServer {
         let weak = Arc::downgrade(self);
         task::spawn(async move {
             let Some(this) = weak.upgrade() else { return };
+            let Err(_) = this.inner.apply(op.clone()).await else { return };
             let request = this.self_ck.call(op);
             let request = timeout(QUERY_TIMEOUT, request);
             let Ok(Reply::Ok) = request.await else { return };
@@ -316,7 +317,7 @@ impl Config {
             .enumerate()
             .filter(|&(_, &g)| gid == g)
             .map(|(s, _)| s)
-            .collect::<HashSet<_>>()
+            .collect()
     }
 }
 
