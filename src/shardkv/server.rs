@@ -78,9 +78,9 @@ impl ShardKvServer {
         let fetch_config = self.ctrl_ck.query_at(num);
         let fetch_config = timeout(QUERY_TIMEOUT, fetch_config);
         let Ok(config) = fetch_config.await else { return };
-        if config.num != num {
-            return;
-        }
+        // if config.num != num {
+        //     return;
+        // }
         self.spawn_self_op(Op::NewConfig { config });
     }
 
