@@ -65,12 +65,15 @@ impl ShardKvServer {
         task::spawn(async move {
             loop {
                 let Some(this) = weak.upgrade() else { return };
-                this.fetch_config().await;
-                drop(this);
+                this.spawn_fetch_config();
                 sleep(Duration::from_millis(100)).await;
             }
         })
         .detach();
+    }
+
+    fn spawn_fetch_config(self: Arc<Self>) {
+        task::spawn(async move { self.fetch_config().await }).detach();
     }
 
     async fn fetch_config(self: &Arc<Self>) {
