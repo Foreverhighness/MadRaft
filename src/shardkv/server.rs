@@ -25,7 +25,7 @@ static USE_PULL: bool = false;
 static GARBAGE_COLLECT: bool = true;
 static HANDLE_REQUEST_DURING_MIGRATION: bool = true;
 
-const QUERY_TIMEOUT: Duration = Duration::from_secs(60);
+const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct ShardKvServer {
     inner: Arc<Server<ShardKv>>,
@@ -67,7 +67,7 @@ impl ShardKvServer {
                 let Some(this) = weak.upgrade() else { return };
                 this.fetch_config().await;
                 drop(this);
-                sleep(Duration::from_millis(300)).await;
+                sleep(Duration::from_millis(100)).await;
             }
         })
         .detach();
