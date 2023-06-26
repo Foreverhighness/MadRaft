@@ -1,4 +1,7 @@
-use super::{key2shard, msg::*};
+use super::{
+    key2shard,
+    msg::{DeleteShards, InstallShards, Op, Reply},
+};
 use crate::{
     kvraft::{
         client::ClerkCore,
@@ -100,31 +103,30 @@ impl ShardKvServer {
         task::spawn(async move {
             loop {
                 let Some(this) = weak.upgrade() else { return };
-                this.do_push().await;
-                {
-                    let state = this.inner.state().lock().unwrap();
-                    info!(
-                        "CONFIG G{} now push:{:?}, pull:{:?} at T{}",
-                        this.me,
-                        state.push.keys().collect::<BTreeSet<_>>(),
-                        state.pull,
-                        state.config.num
-                    );
-                }
-                drop(this);
+                this.spawn_push_shards();
                 sleep(Duration::from_millis(300)).await;
             }
         })
         .detach();
     }
 
-    async fn do_push(self: &Arc<Self>) {
-        let need_push = !self.inner.state().lock().unwrap().push.is_empty();
-        if !need_push {
-            return;
-        }
-        let args = self.inner.state().lock().unwrap().push_args();
-        let me = self.me;
+    fn spawn_push_shards(self: Arc<Self>) {
+        let args = {
+            let state = self.inner.state().lock().unwrap();
+            let me = self.me;
+            info!(
+                "CONFIG G{me} now push:{:?}, pull:{:?} at T{}",
+                state.push.keys().collect::<BTreeSet<_>>(),
+                state.pull,
+                state.config.num
+            );
+
+            let need_push = !state.push.is_empty();
+            if !need_push {
+                return;
+            }
+            state.push_args()
+        };
         // trace!("PUSH G{me} send push args: {args:?}");
 
         for (servers, config_id, shards, kv, seen) in args {
@@ -207,6 +209,8 @@ impl ShardKv {
     }
 
     fn config_migrate(&mut self, new_config: &Config) {
+        let me = self.me;
+        info!("CONFIG G{me} {:?} -> {new_config:?}", self.config);
         if self.config.groups.is_empty() || new_config.groups.is_empty() {
             return;
         }
@@ -226,16 +230,15 @@ impl ShardKv {
             }
             std::cmp::Ordering::Greater => {
                 // push
-                let config = new_config;
                 let mut gid2shards: HashMap<Gid, Vec<_>> = HashMap::new();
                 for shard in diff {
-                    let gid = config.shards[shard];
+                    let gid = new_config.shards[shard];
                     gid2shards.entry(gid).or_default().push(shard);
                 }
                 assert!(self.push.is_empty());
                 self.push = gid2shards
                     .into_iter()
-                    .map(|(gid, shards)| (shards, config.groups[&gid].clone()))
+                    .map(|(gid, shards)| (shards, new_config.groups[&gid].clone()))
                     .collect();
             }
             std::cmp::Ordering::Equal => assert_eq!(old_shards, new_shards),
@@ -243,13 +246,11 @@ impl ShardKv {
     }
 
     fn push_args(&self) -> Vec<Ret> {
-        let config_id = self.config.num;
-
         // construct
         let mut ret = self
             .push
             .iter()
-            .map(move |(shards, servers)| {
+            .map(|(shards, servers)| {
                 (
                     servers.clone(),
                     self.config.num,
@@ -259,12 +260,13 @@ impl ShardKv {
                 )
             })
             .collect::<Vec<Ret>>();
+        #[allow(clippy::pattern_type_mismatch)]
         ret.sort_by_key(|(.., shards, _, _)| shards[0]);
 
         // insert kvs
-        for (k, v) in self.kv.iter() {
+        for (k, v) in &self.kv {
             let shard = key2shard(k);
-            for (.., shards, kv, _) in ret.iter_mut() {
+            for &mut (.., ref shards, ref mut kv, _) in &mut ret {
                 if shards.contains(&shard) {
                     assert!(kv.insert(k.clone(), v.clone()).is_none());
                     break;
@@ -308,9 +310,8 @@ impl State for ShardKv {
                 if !self.can_serve(&key) {
                     return Reply::WrongGroup;
                 }
-                return Reply::Get {
-                    value: self.kv.get(&key).cloned(),
-                };
+                let value = self.kv.get(&key).cloned();
+                return Reply::Get { value };
             }
             Op::Put { key, value, id } => {
                 if !self.can_serve(&key) {
@@ -341,7 +342,6 @@ impl State for ShardKv {
 
                 let can_advance = self.pull.is_empty() && self.push.is_empty();
                 if can_advance {
-                    info!("CONFIG G{me} {:?} -> {config:?}", self.config);
                     self.config_migrate(&config);
                     self.config = config;
                     info!(

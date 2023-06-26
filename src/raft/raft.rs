@@ -11,7 +11,10 @@ mod logs; // indicates that the logs module is in a different file
 use logs::{LogEntry, Logs};
 
 mod rpcs;
-use rpcs::{AppendEntriesArgs, InstallSnapshotArgs, RequestVoteArgs};
+use rpcs::{
+    AppendEntriesArgs, AppendEntriesReply, InstallSnapshotArgs, InstallSnapshotReply,
+    RequestVoteArgs, RequestVoteReply,
+};
 
 mod roles;
 use roles::Ticker;
@@ -306,7 +309,7 @@ impl RaftHandle {
                 if let Some(this) = weak.upgrade() {
                     this.request_vote(&args).await.unwrap()
                 } else {
-                    Default::default()
+                    RequestVoteReply::default()
                 }
             }
         });
@@ -318,7 +321,7 @@ impl RaftHandle {
                 if let Some(this) = weak.upgrade() {
                     this.append_entries(args).await.unwrap()
                 } else {
-                    Default::default()
+                    AppendEntriesReply::default()
                 }
             }
         });
@@ -329,7 +332,7 @@ impl RaftHandle {
                 if let Some(this) = weak.upgrade() {
                     this.install_snapshot(args).await.unwrap()
                 } else {
-                    Default::default()
+                    InstallSnapshotReply::default()
                 }
             }
         });

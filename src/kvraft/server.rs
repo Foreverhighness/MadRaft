@@ -10,7 +10,7 @@ use std::{
     collections::HashMap,
     fmt::{self, Debug},
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
     time::Duration,
 };
 
@@ -89,7 +89,7 @@ impl<S: State> Server<S> {
 
         let weak = Arc::downgrade(self);
         net.add_rpc_handler(move |cmd: S::Command| {
-            let weak = weak.clone();
+            let weak = Weak::clone(&weak);
             async move {
                 if let Some(this) = weak.upgrade() {
                     this.apply(cmd).await

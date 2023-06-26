@@ -1,4 +1,7 @@
-use super::{key2shard, msg::*};
+use super::{
+    key2shard,
+    msg::{Op, Reply},
+};
 use crate::{
     kvraft::{client::ClerkCoreRef, msg::OpId},
     shard_ctrler::{
@@ -84,7 +87,7 @@ impl Clerk {
                         match reply {
                             Reply::Get { .. } | Reply::Ok => return reply,
                             Reply::WrongGroup => sleep(Duration::from_millis(100)).await,
-                            _ => unreachable!(),
+                            Reply::WrongConfig => unreachable!(),
                         }
                     }
                     Err(e) => trace!("CLIENT C{me} got error from G{gid} {e:?}"),
