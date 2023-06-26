@@ -15,7 +15,7 @@ use madsim::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     net::SocketAddr,
     sync::Arc,
     time::Duration,
@@ -107,7 +107,7 @@ impl ShardKvServer {
                         "CONFIG G{} now push:{:?}, pull:{:?} at T{}",
                         this.me,
                         state.push.keys().collect::<BTreeSet<_>>(),
-                        state.pull.keys().collect::<BTreeSet<_>>(),
+                        state.pull,
                         state.config.num
                     );
                 }
@@ -125,7 +125,7 @@ impl ShardKvServer {
         }
         let args = self.inner.state().lock().unwrap().push_args();
         let me = self.me;
-        trace!("PUSH G{me} send push args: {args:?}");
+        // trace!("PUSH G{me} send push args: {args:?}");
 
         for (servers, config_id, shards, kv, seen) in args {
             let op = InstallShards {
@@ -174,13 +174,13 @@ pub struct ShardKv {
     me: Gid,
     config: Config,
 
-    pull: HashMap<Vec<usize>, Vec<SocketAddr>>,
+    pull: BTreeSet<usize>,
     push: HashMap<Vec<usize>, Vec<SocketAddr>>,
 }
 
 impl ShardKv {
     fn is_pulling(&self, shard: usize) -> bool {
-        self.pull.keys().any(|shards| shards.contains(&shard))
+        self.pull.contains(&shard)
     }
 
     fn can_serve(&self, key: &str) -> bool {
@@ -215,58 +215,69 @@ impl ShardKv {
         let diff = old_shards
             .symmetric_difference(&new_shards)
             .copied()
-            .collect::<HashSet<_>>();
+            .collect::<BTreeSet<_>>();
         assert_eq!(diff.len(), old_shards.len().abs_diff(new_shards.len()));
 
         match old_shards.len().cmp(&new_shards.len()) {
             std::cmp::Ordering::Less => {
                 // pull
-                // TODO: group by gid
-                let config = &self.config;
-                for shard in diff {
-                    let gid = config.shards[shard];
-                    self.pull.insert(vec![shard], config.groups[&gid].clone());
-                }
+                assert!(self.pull.is_empty());
+                self.pull = diff;
             }
             std::cmp::Ordering::Greater => {
                 // push
-                // TODO: group by gid
                 let config = new_config;
+                let mut gid2shards: HashMap<Gid, Vec<_>> = HashMap::new();
                 for shard in diff {
                     let gid = config.shards[shard];
-                    self.push.insert(vec![shard], config.groups[&gid].clone());
+                    gid2shards.entry(gid).or_default().push(shard);
                 }
+                assert!(self.push.is_empty());
+                self.push = gid2shards
+                    .into_iter()
+                    .map(|(gid, shards)| (shards, config.groups[&gid].clone()))
+                    .collect();
             }
             std::cmp::Ordering::Equal => assert_eq!(old_shards, new_shards),
         }
     }
 
     fn push_args(&self) -> Vec<Ret> {
-        // TODO: rewrite with for loop
         let config_id = self.config.num;
 
+        // construct
         let mut ret = self
             .push
             .iter()
             .map(move |(shards, servers)| {
-                let (shards, servers) = (shards.clone(), servers.clone());
-                let kv = self
-                    .kv
-                    .iter()
-                    .filter(|&(key, value)| shards.contains(&key2shard(key)))
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect();
-                let seen = self.seen.clone();
-                (servers, config_id, shards, kv, seen)
+                (
+                    servers.clone(),
+                    self.config.num,
+                    shards.clone(),
+                    HashMap::new(),
+                    self.seen.clone(),
+                )
             })
-            .collect::<Vec<_>>();
-        ret.sort_by_key(|(_, _, shards, ..)| shards[0]);
+            .collect::<Vec<Ret>>();
+        ret.sort_by_key(|(.., shards, _, _)| shards[0]);
+
+        // insert kvs
+        for (k, v) in self.kv.iter() {
+            let shard = key2shard(k);
+            for (.., shards, kv, _) in ret.iter_mut() {
+                if shards.contains(&shard) {
+                    assert!(kv.insert(k.clone(), v.clone()).is_none());
+                    break;
+                }
+            }
+        }
+
         ret
     }
 }
 
 impl Config {
-    fn shards_by_gid(&self, gid: Gid) -> HashSet<usize> {
+    fn shards_by_gid(&self, gid: Gid) -> BTreeSet<usize> {
         self.shards
             .iter()
             .enumerate()
@@ -336,7 +347,7 @@ impl State for ShardKv {
                     info!(
                         "CONFIG G{me} now push:{:?}, pull:{:?} at T{}",
                         self.push.keys().collect::<BTreeSet<_>>(),
-                        self.pull.keys().collect::<BTreeSet<_>>(),
+                        self.pull,
                         self.config.num
                     );
                 }
@@ -352,14 +363,20 @@ impl State for ShardKv {
                     std::cmp::Ordering::Greater => return Reply::WrongConfig,
                     std::cmp::Ordering::Equal => (),
                 }
-                let ret = self.pull.remove(&shards);
-                if ret.is_some() {
+                let ret = shards
+                    .iter()
+                    .map(|shard| self.pull.remove(shard))
+                    .collect::<Vec<_>>();
+                let keep = ret.iter().all(|&r| r);
+                let removed = ret.iter().all(|&r| !r);
+                assert!(keep || removed);
+                if keep {
                     self.kv.extend(kv);
                     self.seen.install(seen);
                 }
                 info!(
                     "INSTALL G{me} install {shards:?}, now pull: {:?} at T{config_id}",
-                    self.pull.keys().collect::<BTreeSet<_>>()
+                    self.pull
                 );
             }
             Op::DeleteShards(DeleteShards { config_id, shards }) => {

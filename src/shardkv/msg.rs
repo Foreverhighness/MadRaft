@@ -5,12 +5,21 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct InstallShards {
     pub config_id: ConfigId,
     pub shards: Vec<usize>,
     pub kv: HashMap<String, String>,
     pub seen: Seen,
+}
+
+impl std::fmt::Debug for InstallShards {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InstallShards")
+            .field("config_id", &self.config_id)
+            .field("shards", &self.shards)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
