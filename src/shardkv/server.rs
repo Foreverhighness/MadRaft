@@ -21,7 +21,7 @@ use std::{
     time::Duration,
 };
 
-static USE_PULL: bool = false;
+static USE_PULL: bool = true;
 static GARBAGE_COLLECT: bool = true;
 static HANDLE_REQUEST_DURING_MIGRATION: bool = true;
 
@@ -52,11 +52,7 @@ impl ShardKvServer {
         });
         this.inner.state().lock().unwrap().me = gid;
         this.spawn_fetcher();
-        if USE_PULL {
-            this.spawn_puller();
-        } else {
-            this.spawn_pusher();
-        }
+        this.spawn_worker();
         this
     }
 
@@ -81,9 +77,9 @@ impl ShardKvServer {
         let fetch_config = self.ctrl_ck.query_at(num);
         let fetch_config = timeout(QUERY_TIMEOUT, fetch_config);
         let Ok(config) = fetch_config.await else { return };
-        // if config.num != num {
-        //     return;
-        // }
+        if USE_PULL && config.num != num {
+            return;
+        }
         self.spawn_self_op(Op::NewConfig { config });
     }
 
@@ -107,12 +103,12 @@ impl ShardKvServer {
         .detach();
     }
 
-    fn spawn_pusher(self: &Arc<Self>) {
+    fn spawn_worker(self: &Arc<Self>) {
         let weak = Arc::downgrade(self);
         task::spawn(async move {
             loop {
                 let Some(this) = weak.upgrade() else { return };
-                this.do_push().await;
+                this.do_work().await;
                 {
                     let state = this.inner.state().lock().unwrap();
                     info!(
@@ -128,6 +124,14 @@ impl ShardKvServer {
             }
         })
         .detach();
+    }
+
+    async fn do_work(self: &Arc<Self>) {
+        if USE_PULL {
+            self.do_pull().await;
+        } else {
+            self.do_push().await;
+        }
     }
 
     async fn do_push(self: &Arc<Self>) {
@@ -172,20 +176,8 @@ impl ShardKvServer {
         .detach();
     }
 
-    fn spawn_puller(self: &Arc<Self>) {
-        let weak = Arc::downgrade(self);
-        task::spawn(async move {
-            loop {
-                let Some(this) = weak.upgrade() else { return };
-                this.do_pull().await;
-                drop(this);
-                sleep(Duration::from_millis(300)).await;
-            }
-        })
-        .detach();
-    }
-
     async fn do_pull(self: &Arc<Self>) {
+        assert!(USE_PULL);
         let need_pull = !self.inner.state().lock().unwrap().pull.is_empty();
         if !need_pull {
             return;
@@ -213,8 +205,8 @@ impl ShardKvServer {
 }
 
 async fn send_operation(servers: Vec<SocketAddr>, op: Op) -> Result<Reply, Elapsed> {
-    let push_ck = ClerkCore::<Op, Reply>::new(servers);
-    let request = push_ck.call(op);
+    let clerk = ClerkCore::<Op, Reply>::new(servers);
+    let request = clerk.call(op);
     timeout(QUERY_TIMEOUT, request).await
 }
 
@@ -391,7 +383,6 @@ impl State for ShardKv {
             }
             Op::PullShards { config_id, shards } => {
                 assert!(USE_PULL);
-                todo!();
                 match config_id.cmp(&self.config.num) {
                     std::cmp::Ordering::Less => return Reply::Ok,
                     std::cmp::Ordering::Greater => return Reply::WrongConfig,
