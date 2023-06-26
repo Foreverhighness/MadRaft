@@ -15,15 +15,15 @@ use madsim::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     net::SocketAddr,
     sync::Arc,
     time::Duration,
 };
 
 static USE_PULL: bool = true;
-static GARBAGE_COLLECT: bool = true;
-static HANDLE_REQUEST_DURING_MIGRATION: bool = true;
+static GARBAGE_COLLECT: bool = false;
+static HANDLE_REQUEST_DURING_MIGRATION: bool = false;
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -114,8 +114,8 @@ impl ShardKvServer {
                     info!(
                         "CONFIG G{} now push:{:?}, pull:{:?} at T{}",
                         this.me,
-                        state.push.keys(),
-                        state.pull.keys(),
+                        state.push.keys().collect::<BTreeSet<_>>(),
+                        state.pull.keys().collect::<BTreeSet<_>>(),
                         state.config.num
                     );
                 }
@@ -184,8 +184,13 @@ impl ShardKvServer {
         }
         let state = self.inner.state().lock().unwrap();
         let config_id = state.config.num;
-        for (shards, servers) in &state.pull {
-            let (shards, servers) = (shards.clone(), servers.clone());
+        let args = state
+            .pull
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for (shards, servers) in args {
+            // let (shards, servers) = (shards.clone(), servers.clone());
             let weak = Arc::downgrade(self);
             task::spawn(async move {
                 let pull_op = Op::PullShards { config_id, shards: shards.clone() };
@@ -288,7 +293,9 @@ impl ShardKv {
     fn push_args(&self) -> Vec<Ret> {
         // TODO: rewrite with for loop
         let config_id = self.config.num;
-        self.push
+
+        let mut ret = self
+            .push
             .iter()
             .map(move |(shards, servers)| {
                 let (shards, servers) = (shards.clone(), servers.clone());
@@ -301,7 +308,9 @@ impl ShardKv {
                 let seen = self.seen.clone();
                 (servers, config_id, shards, kv, seen)
             })
-            .collect()
+            .collect::<Vec<_>>();
+        ret.sort_by_key(|(_, _, shards, ..)| shards[0]);
+        ret
     }
 }
 
@@ -375,8 +384,8 @@ impl State for ShardKv {
                     self.config = config;
                     info!(
                         "CONFIG G{me} now push:{:?}, pull:{:?} at T{}",
-                        self.push.keys(),
-                        self.pull.keys(),
+                        self.push.keys().collect::<BTreeSet<_>>(),
+                        self.pull.keys().collect::<BTreeSet<_>>(),
                         self.config.num
                     );
                 }
@@ -415,7 +424,7 @@ impl State for ShardKv {
                 }
                 info!(
                     "INSTALL G{me} install {shards:?}, now pull: {:?} at T{config_id}",
-                    self.pull.keys()
+                    self.pull.keys().collect::<BTreeSet<_>>()
                 );
             }
             Op::DeleteShards(DeleteShards { config_id, shards }) => {
@@ -440,7 +449,7 @@ impl State for ShardKv {
                 }
                 info!(
                     "DELETE G{me} delete {shards:?}, now push: {:?} at T{config_id}",
-                    self.push.keys()
+                    self.push.keys().collect::<BTreeSet<_>>()
                 );
             }
         }
