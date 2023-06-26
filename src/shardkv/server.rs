@@ -15,15 +15,14 @@ use madsim::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     net::SocketAddr,
     sync::Arc,
     time::Duration,
 };
 
-static USE_PULL: bool = true;
-static GARBAGE_COLLECT: bool = false;
-static HANDLE_REQUEST_DURING_MIGRATION: bool = false;
+static GARBAGE_COLLECT: bool = true;
+static HANDLE_REQUEST_DURING_MIGRATION: bool = true;
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -52,7 +51,7 @@ impl ShardKvServer {
         });
         this.inner.state().lock().unwrap().me = gid;
         this.spawn_fetcher();
-        this.spawn_worker();
+        this.spawn_pusher();
         this
     }
 
@@ -77,21 +76,14 @@ impl ShardKvServer {
         let fetch_config = self.ctrl_ck.query_at(num);
         let fetch_config = timeout(QUERY_TIMEOUT, fetch_config);
         let Ok(config) = fetch_config.await else { return };
-        if USE_PULL && config.num != num {
-            return;
-        }
+        // if config.num != num {
+        //     return;
+        // }
         self.spawn_self_op(Op::NewConfig { config });
     }
 
     fn spawn_self_op(self: &Arc<Self>, op: Op) {
-        if USE_PULL {
-            assert!(matches!(
-                op,
-                Op::NewConfig { .. } | Op::InstallShards { .. }
-            ));
-        } else {
-            assert!(matches!(op, Op::NewConfig { .. } | Op::DeleteShards { .. }));
-        }
+        assert!(matches!(op, Op::NewConfig { .. } | Op::DeleteShards { .. }));
         let weak = Arc::downgrade(self);
         task::spawn(async move {
             let Some(this) = weak.upgrade() else { return };
@@ -103,12 +95,12 @@ impl ShardKvServer {
         .detach();
     }
 
-    fn spawn_worker(self: &Arc<Self>) {
+    fn spawn_pusher(self: &Arc<Self>) {
         let weak = Arc::downgrade(self);
         task::spawn(async move {
             loop {
                 let Some(this) = weak.upgrade() else { return };
-                this.do_work().await;
+                this.do_push().await;
                 {
                     let state = this.inner.state().lock().unwrap();
                     info!(
@@ -124,14 +116,6 @@ impl ShardKvServer {
             }
         })
         .detach();
-    }
-
-    async fn do_work(self: &Arc<Self>) {
-        if USE_PULL {
-            self.do_pull().await;
-        } else {
-            self.do_push().await;
-        }
     }
 
     async fn do_push(self: &Arc<Self>) {
@@ -156,7 +140,6 @@ impl ShardKvServer {
 
     fn spawn_install_shards(self: &Arc<Self>, servers: Vec<SocketAddr>, push_op: InstallShards) {
         let me = self.me;
-        assert!(!USE_PULL);
 
         let weak = Arc::downgrade(self);
         let delete_op = DeleteShards {
@@ -174,38 +157,6 @@ impl ShardKvServer {
             }
         })
         .detach();
-    }
-
-    async fn do_pull(self: &Arc<Self>) {
-        assert!(USE_PULL);
-        let need_pull = !self.inner.state().lock().unwrap().pull.is_empty();
-        if !need_pull {
-            return;
-        }
-        let state = self.inner.state().lock().unwrap();
-        let config_id = state.config.num;
-        let args = state
-            .pull
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect::<BTreeMap<_, _>>();
-        for (shards, servers) in args {
-            // let (shards, servers) = (shards.clone(), servers.clone());
-            let weak = Arc::downgrade(self);
-            task::spawn(async move {
-                let pull_op = Op::PullShards { config_id, shards: shards.clone() };
-                let Ok(Reply::PullShards { kv, seen }) = send_operation(servers.clone(), pull_op).await else { return };
-
-                let Some(this) = weak.upgrade() else { return };
-                let push_op = Op::InstallShards(InstallShards{ config_id, shards: shards.clone(), kv, seen });
-                let request = this.self_ck.call(push_op);
-                let request = timeout(QUERY_TIMEOUT, request);
-                let Ok(Reply::Ok) = request.await else { return };
-
-                let del_op = Op::DeleteShards(DeleteShards { config_id, shards });
-                let Ok(Reply::Ok) = send_operation(servers, del_op).await else { return };
-            }).detach();
-        }
     }
 }
 
@@ -389,22 +340,6 @@ impl State for ShardKv {
                         self.config.num
                     );
                 }
-            }
-            Op::PullShards { config_id, shards } => {
-                assert!(USE_PULL);
-                match config_id.cmp(&self.config.num) {
-                    std::cmp::Ordering::Less => return Reply::Ok,
-                    std::cmp::Ordering::Greater => return Reply::WrongConfig,
-                    std::cmp::Ordering::Equal => (),
-                }
-                let kv = self
-                    .kv
-                    .iter()
-                    .filter(|&(key, _)| shards.contains(&key2shard(key)))
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-                let seen = self.seen.clone();
-                return Reply::PullShards { kv, seen };
             }
             Op::InstallShards(InstallShards {
                 config_id,

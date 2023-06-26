@@ -37,23 +37,13 @@ pub enum Op {
     NewConfig {
         config: Config,
     },
-    PullShards {
-        config_id: ConfigId,
-        shards: Vec<usize>,
-    },
     InstallShards(InstallShards),
     DeleteShards(DeleteShards),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Reply {
-    Get {
-        value: Option<String>,
-    },
-    PullShards {
-        kv: HashMap<String, String>,
-        seen: Seen,
-    },
+    Get { value: Option<String> },
     Ok,
     WrongGroup,
     WrongConfig,
